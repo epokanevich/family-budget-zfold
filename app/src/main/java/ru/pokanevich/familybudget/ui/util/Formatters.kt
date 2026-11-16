@@ -17,7 +17,7 @@ object Formatters {
         groupingSeparator = '\u00A0'
     })
 
-    private val decimalFormatter = DecimalFormat("#,##0.##", DecimalFormatSymbols(ruLocale).apply {
+    private val decimalFormatter = DecimalFormat("#,##0.00", DecimalFormatSymbols(ruLocale).apply {
         groupingSeparator = '\u00A0'
         decimalSeparator = ','
     })
@@ -37,8 +37,10 @@ object Formatters {
     )
 
     fun formatRub(amount: Double, showKopecksIfAny: Boolean = false): String {
-        val rounded = (amount * 100.0).roundToLong() / 100.0
-        val hasFraction = showKopecksIfAny && abs(rounded - rounded.roundToLong()) > 0.005
+        val kopecks = (amount * 100.0).roundToLong()
+        if (kopecks == 0L) return "0\u00A0₽"
+        val rounded = kopecks / 100.0
+        val hasFraction = showKopecksIfAny && (kopecks % 100L != 0L)
         val numStr = if (hasFraction) {
             decimalFormatter.format(rounded)
         } else {

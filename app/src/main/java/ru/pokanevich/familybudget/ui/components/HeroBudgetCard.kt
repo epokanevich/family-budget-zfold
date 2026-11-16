@@ -34,18 +34,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ru.pokanevich.familybudget.ai.AiBudgetReport
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
+import ru.pokanevich.familybudget.ui.util.BudgetPeriod
 import ru.pokanevich.familybudget.ui.util.Formatters
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @Composable
 fun HeroBudgetCard(
     report: AiBudgetReport,
-    monthZeroBased: Int,
-    year: Int,
     modifier: Modifier = Modifier
 ) {
     val palette = LocalFamilyPalette.current
+    val window = report.window
+    val isMonth = window.period == BudgetPeriod.MONTH
     val budget = report.monthlyBudgetRub.coerceAtLeast(1.0)
     val rawRatio = (report.totalSpentThisMonthRub / budget).toFloat().coerceIn(0f, 1f)
     val animatedFill by animateFloatAsState(
@@ -54,9 +54,9 @@ fun HeroBudgetCard(
         label = "budgetFill"
     )
 
-    val paceDelta = report.expectedSpentByTodayRub - report.totalSpentThisMonthRub
-    val isOverBudget = report.totalSpentThisMonthRub > report.monthlyBudgetRub
-    val isOverPace = report.isCurrentMonth && report.totalSpentThisMonthRub > report.expectedSpentByTodayRub * 1.12
+    val isOverBudget = isMonth && report.totalSpentThisMonthRub > report.monthlyBudgetRub
+    val isOverPace = isMonth && report.isCurrentMonth &&
+        report.totalSpentThisMonthRub > report.expectedSpentByTodayRub * 1.12
 
     val barColor = when {
         isOverBudget -> Color(0xFFFB7185)
@@ -64,18 +64,19 @@ fun HeroBudgetCard(
         else -> Color(0xFF34D399)
     }
 
-    val statusText = when {
-        isOverBudget -> "Перерасход +${Formatters.formatRub(report.totalSpentThisMonthRub - report.monthlyBudgetRub)}"
-        !report.isCurrentMonth -> "${report.totalExpenseTransactions} расходов"
-        paceDelta >= budget * 0.03 -> "Запас +${Formatters.formatRub(paceDelta)}"
-        paceDelta <= -budget * 0.03 -> "Темп +${Formatters.formatRub(abs(paceDelta))}"
-        else -> "Ровно по плану"
+    val allTimeBalance = report.allTimeBalanceRub
+    val allTimeText = "Итого: ${Formatters.formatRub(allTimeBalance, showKopecksIfAny = true)}"
+    val allTimeBg = if (allTimeBalance < -0.005) {
+        Color(0xFFFB7185).copy(alpha = 0.28f)
+    } else {
+        Color(0xFF34D399).copy(alpha = 0.25f)
     }
 
-    val statusBg = when {
-        isOverBudget -> Color(0xFFFB7185).copy(alpha = 0.24f)
-        isOverPace -> Color(0xFFFBBF24).copy(alpha = 0.22f)
-        else -> Color.White.copy(alpha = 0.16f)
+    val periodNet = report.totalIncomeThisMonthRub - report.totalSpentThisMonthRub
+    val periodNetStr = if (periodNet > 0.005) {
+        "+${Formatters.formatRub(periodNet, showKopecksIfAny = true)}"
+    } else {
+        Formatters.formatRub(periodNet, showKopecksIfAny = true)
     }
 
     val eugene = report.eugeneSpentRub
@@ -123,13 +124,9 @@ fun HeroBudgetCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (report.isCurrentMonth) {
-                            "Общий котёл • в ${Formatters.formatMonthPrepositional(monthZeroBased)}"
-                        } else {
-                            "Общий котёл • ${Formatters.formatMonthTitle(year, monthZeroBased)}"
-                        },
+                        text = "Расходы • ${window.title}",
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color.White.copy(alpha = 0.82f),
+                        color = Color.White.copy(alpha = 0.85f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
@@ -138,36 +135,40 @@ fun HeroBudgetCard(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(999.dp))
-                            .background(statusBg)
+                            .background(allTimeBg)
                             .padding(horizontal = 10.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            text = statusText,
+                            text = allTimeText,
                             style = MaterialTheme.typography.labelSmall,
                             color = Color.White,
-                            fontWeight = FontWeight.SemiBold,
+                            fontWeight = FontWeight.Bold,
                             maxLines = 1
                         )
                     }
                 }
 
-                // Big Amount Row + Monthly Income pill
+                // Big Amount Row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Bottom
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.Bottom,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = Formatters.formatRub(report.totalSpentThisMonthRub),
-                            style = MaterialTheme.typography.headlineLarge,
-                            color = Color.White
-                        )
+                    Text(
+                        text = Formatters.formatRub(report.totalSpentThisMonthRub, showKopecksIfAny = true),
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = Color.White
+                    )
+                    if (isMonth) {
                         Text(
                             text = "из ${Formatters.formatRub(report.monthlyBudgetRub)}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.72f),
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        )
+                    } else {
+                        Text(
+                            text = "${report.totalExpenseTransactions} оп.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.White.copy(alpha = 0.72f),
                             modifier = Modifier.padding(bottom = 4.dp)
@@ -175,37 +176,39 @@ fun HeroBudgetCard(
                     }
                 }
 
-                // Progress bar with calendar pace marker
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(14.dp),
-                    contentAlignment = Alignment.CenterStart
-                ) {
+                // Progress bar (Budget pace in Month mode, Expense/Income ratio in other modes)
+                if (isMonth) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(8.dp)
-                            .clip(RoundedCornerShape(999.dp))
-                            .background(Color.White.copy(alpha = 0.18f))
+                            .height(14.dp),
+                        contentAlignment = Alignment.CenterStart
                     ) {
                         Box(
                             modifier = Modifier
-                                .fillMaxHeight()
-                                .fillMaxWidth(animatedFill)
+                                .fillMaxWidth()
+                                .height(8.dp)
                                 .clip(RoundedCornerShape(999.dp))
-                                .background(barColor)
-                        )
-                    }
-                    if (report.isCurrentMonth && report.monthProgressRatio in 0.03f..0.97f) {
-                        Canvas(modifier = Modifier.fillMaxSize()) {
-                            val markerX = size.width * report.monthProgressRatio
-                            drawLine(
-                                color = Color.White.copy(alpha = 0.92f),
-                                start = Offset(markerX, 0f),
-                                end = Offset(markerX, size.height),
-                                strokeWidth = 2.dp.toPx()
+                                .background(Color.White.copy(alpha = 0.18f))
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .fillMaxWidth(animatedFill)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(barColor)
                             )
+                        }
+                        if (report.isCurrentMonth && report.monthProgressRatio in 0.03f..0.97f) {
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                val markerX = size.width * report.monthProgressRatio
+                                drawLine(
+                                    color = Color.White.copy(alpha = 0.92f),
+                                    start = Offset(markerX, 0f),
+                                    end = Offset(markerX, size.height),
+                                    strokeWidth = 2.dp.toPx()
+                                )
+                            }
                         }
                     }
                 }
@@ -222,21 +225,20 @@ fun HeroBudgetCard(
                 ) {
                     HeroMiniMetric(
                         label = "Доходы",
-                        value = "+${Formatters.formatRub(report.totalIncomeThisMonthRub)}",
+                        value = "+${Formatters.formatRub(report.totalIncomeThisMonthRub, showKopecksIfAny = true)}",
                         valueColor = Color(0xFF6EE7B7),
-                        modifier = Modifier.weight(1.05f)
+                        modifier = Modifier.weight(1.08f)
                     )
 
-                    val remaining = report.monthlyBudgetRub - report.totalSpentThisMonthRub
                     HeroMiniMetric(
-                        label = if (remaining >= 0) "Остаток" else "Перерасход",
-                        value = Formatters.formatRub(abs(remaining)),
-                        valueColor = Color.White,
+                        label = "За период",
+                        value = periodNetStr,
+                        valueColor = if (periodNet < -0.005) Color(0xFFFDA4AF) else Color.White,
                         modifier = Modifier.weight(1f)
                     )
 
                     Column(
-                        modifier = Modifier.weight(1.05f),
+                        modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Row(

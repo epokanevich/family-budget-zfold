@@ -61,7 +61,9 @@ import ru.pokanevich.familybudget.ui.theme.AuthorAvatarCircle
 import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
 import ru.pokanevich.familybudget.ui.theme.visual
+import ru.pokanevich.familybudget.ui.util.BudgetPeriod
 import ru.pokanevich.familybudget.ui.util.Formatters
+import ru.pokanevich.familybudget.ui.util.PeriodWindow
 import kotlin.math.roundToInt
 
 private data class ChartSlice(
@@ -74,9 +76,13 @@ private data class ChartSlice(
 fun AiAnalyticsPane(
     report: AiBudgetReport,
     geminiApiKey: String,
-    selectedYear: Int,
-    selectedMonthZeroBased: Int,
+    window: PeriodWindow,
+    showPeriodSwitcher: Boolean,
     showHeroAtTop: Boolean,
+    onSelectPeriod: (BudgetPeriod) -> Unit,
+    onPrevPeriod: () -> Unit,
+    onNextPeriod: () -> Unit,
+    onJumpToCurrent: () -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -93,12 +99,18 @@ fun AiAnalyticsPane(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        if (showHeroAtTop) {
-            HeroBudgetCard(
-                report = report,
-                monthZeroBased = selectedMonthZeroBased,
-                year = selectedYear
+        if (showPeriodSwitcher) {
+            PeriodSwitcherBar(
+                window = window,
+                onSelectPeriod = onSelectPeriod,
+                onPrevPeriod = onPrevPeriod,
+                onNextPeriod = onNextPeriod,
+                onJumpToCurrent = onJumpToCurrent
             )
+        }
+
+        if (showHeroAtTop) {
+            HeroBudgetCard(report = report)
         }
 
         // 1. Donut Chart Card with Расходы / Доходы Toggle
@@ -115,10 +127,10 @@ fun AiAnalyticsPane(
             }
         )
 
-        // 2. Category Pace & Limits Card (for Expenses)
+        // 2. Category Pace & Limits Card
         CategoryPaceBreakdownCard(report = report)
 
-        // 3. Family Member Contribution & Cashflow Card
+        // 3. Family Member Contribution & Cumulative Balance Card
         CoupleContributionCard(report = report)
 
         // 4. AI Financial Verdict & Gemini Advisor Card
@@ -319,7 +331,6 @@ private fun CategoryDonutCard(
                     )
                 }
 
-                // Segmented pill: Расходы / Доходы
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = palette.surfaceElevated
@@ -357,9 +368,9 @@ private fun CategoryDonutCard(
                 ) {
                     Text(
                         text = if (showIncomes) {
-                            "Нет записей доходов за выбранный месяц"
+                            "Нет записей доходов за выбранный период"
                         } else {
-                            "Появится после первой траты за этот месяц"
+                            "Нет расходов за выбранный период"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.textMuted,
@@ -367,7 +378,6 @@ private fun CategoryDonutCard(
                     )
                 }
             } else {
-                // Donut Ring + Center Label
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -420,7 +430,7 @@ private fun CategoryDonutCard(
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = Formatters.formatRub(selectedSlice.amountRub),
+                                text = Formatters.formatRub(selectedSlice.amountRub, true),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = palette.textPrimary
@@ -438,7 +448,7 @@ private fun CategoryDonutCard(
                                 color = palette.textSecondary
                             )
                             Text(
-                                text = Formatters.formatRub(total),
+                                text = Formatters.formatRub(total, true),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = if (showIncomes) palette.accentEmerald else palette.textPrimary
@@ -452,7 +462,6 @@ private fun CategoryDonutCard(
                     }
                 }
 
-                // Interactive 2-column Legend
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     slices.chunked(2).forEach { pair ->
                         Row(
@@ -495,7 +504,7 @@ private fun CategoryDonutCard(
                                                 overflow = TextOverflow.Ellipsis
                                             )
                                             Text(
-                                                text = Formatters.formatRub(slice.amountRub),
+                                                text = Formatters.formatRub(slice.amountRub, true),
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = palette.textSecondary,
                                                 maxLines = 1
@@ -533,6 +542,8 @@ private fun CategoryPaceBreakdownCard(report: AiBudgetReport) {
             )
     }
 
+    if (sorted.isEmpty()) return
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -554,7 +565,11 @@ private fun CategoryPaceBreakdownCard(report: AiBudgetReport) {
                     modifier = Modifier.size(20.dp)
                 )
                 Text(
-                    text = "Темп по категориям",
+                    text = if (report.window.period == BudgetPeriod.MONTH) {
+                        "Темп по категориям"
+                    } else {
+                        "Категории за период"
+                    },
                     style = MaterialTheme.typography.titleMedium,
                     color = palette.textPrimary
                 )
@@ -563,6 +578,8 @@ private fun CategoryPaceBreakdownCard(report: AiBudgetReport) {
             sorted.forEachIndexed { index, diag ->
                 CategoryPaceRow(
                     diag = diag,
+                    totalPeriodSpent = report.totalSpentThisMonthRub,
+                    period = report.window.period,
                     monthProgressRatio = report.monthProgressRatio,
                     isCurrentMonth = report.isCurrentMonth
                 )
@@ -580,12 +597,18 @@ private fun CategoryPaceBreakdownCard(report: AiBudgetReport) {
 @Composable
 private fun CategoryPaceRow(
     diag: CategoryDiagnosis,
+    totalPeriodSpent: Double,
+    period: BudgetPeriod,
     monthProgressRatio: Float,
     isCurrentMonth: Boolean
 ) {
     val palette = LocalFamilyPalette.current
-    val limit = diag.recommendedLimitRub.coerceAtLeast(1.0)
-    val fillRatio = (diag.spentRub / limit).toFloat().coerceIn(0f, 1f)
+    val denom = if (period == BudgetPeriod.ALL) {
+        totalPeriodSpent.coerceAtLeast(1.0)
+    } else {
+        diag.recommendedLimitRub.coerceAtLeast(1.0)
+    }
+    val fillRatio = (diag.spentRub / denom).toFloat().coerceIn(0f, 1f)
     val animatedRatio by animateFloatAsState(
         targetValue = fillRatio,
         animationSpec = tween(durationMillis = 500),
@@ -630,16 +653,18 @@ private fun CategoryPaceRow(
 
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    text = Formatters.formatRub(diag.spentRub),
+                    text = Formatters.formatRub(diag.spentRub, true),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
                     color = palette.textPrimary
                 )
-                Text(
-                    text = "ориентир ${Formatters.formatRub(diag.recommendedLimitRub)}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.textMuted
-                )
+                if (period != BudgetPeriod.ALL) {
+                    Text(
+                        text = "ориентир ${Formatters.formatRub(diag.recommendedLimitRub)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textMuted
+                    )
+                }
             }
         }
 
@@ -664,7 +689,7 @@ private fun CategoryPaceRow(
                         .background(statusColor)
                 )
             }
-            if (isCurrentMonth && monthProgressRatio in 0.03f..0.97f) {
+            if (period == BudgetPeriod.MONTH && isCurrentMonth && monthProgressRatio in 0.03f..0.97f) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
                     val x = size.width * monthProgressRatio
                     drawLine(
@@ -690,7 +715,7 @@ private fun CoupleContributionCard(report: AiBudgetReport) {
         100 - eugenePct
     } else 50
 
-    val netCashflow = report.totalIncomeThisMonthRub - report.totalSpentThisMonthRub
+    val allTimeBalance = report.allTimeBalanceRub
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -708,20 +733,57 @@ private fun CoupleContributionCard(report: AiBudgetReport) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Баланс и участие пары",
+                    text = "Общий баланс и участие пары",
                     style = MaterialTheme.typography.titleMedium,
                     color = palette.textPrimary
                 )
                 Text(
-                    text = if (netCashflow >= 0) {
-                        "+${Formatters.formatRub(netCashflow)}"
-                    } else {
-                        "-${Formatters.formatRub(-netCashflow)}"
-                    },
+                    text = Formatters.formatRub(allTimeBalance, showKopecksIfAny = true),
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (netCashflow >= 0) palette.accentEmerald else palette.accentCoral,
+                    color = if (allTimeBalance < -0.005) palette.accentCoral else palette.accentEmerald,
                     fontWeight = FontWeight.Bold
                 )
+            }
+
+            // Cumulative All-Time Summary Strip
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                color = palette.surfaceElevated
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text(
+                            text = "Всего доходов",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.textSecondary
+                        )
+                        Text(
+                            text = "+${Formatters.formatRub(report.allTimeIncomeRub, true)}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = palette.accentEmerald,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = "Всего расходов",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.textSecondary
+                        )
+                        Text(
+                            text = Formatters.formatRub(report.allTimeExpenseRub, true),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = palette.textPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
 
             Row(
@@ -807,7 +869,7 @@ private fun MemberStatBox(
                 )
             }
             Text(
-                text = Formatters.formatRub(amountRub),
+                text = Formatters.formatRub(amountRub, true),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.ExtraBold,
                 color = palette.textPrimary

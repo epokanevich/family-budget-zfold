@@ -55,8 +55,9 @@ import ru.pokanevich.familybudget.data.ExpenseCategory
 import ru.pokanevich.familybudget.data.ExpenseEntity
 import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
+import ru.pokanevich.familybudget.ui.util.BudgetPeriod
 import ru.pokanevich.familybudget.ui.util.Formatters
-import java.util.Calendar
+import ru.pokanevich.familybudget.ui.util.PeriodWindow
 
 enum class FeedFilter(val label: String) {
     ALL("Все"),
@@ -67,77 +68,122 @@ enum class FeedFilter(val label: String) {
 }
 
 @Composable
-fun MonthSwitcherBar(
-    selectedYear: Int,
-    selectedMonthZeroBased: Int,
-    isCurrentMonth: Boolean,
-    onPrevMonth: () -> Unit,
-    onNextMonth: () -> Unit,
-    onJumpToCurrentMonth: () -> Unit,
+fun PeriodSwitcherBar(
+    window: PeriodWindow,
+    onSelectPeriod: (BudgetPeriod) -> Unit,
+    onPrevPeriod: () -> Unit,
+    onNextPeriod: () -> Unit,
+    onJumpToCurrent: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val palette = LocalFamilyPalette.current
 
-    Row(
+    Column(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        // День | Неделя | Месяц | Год | Всё
         Surface(
+            modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(14.dp),
             color = palette.surfaceCard,
             border = BorderStroke(1.dp, palette.outlineSubtle)
         ) {
             Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                IconButton(
-                    onClick = onPrevMonth,
-                    modifier = Modifier.size(34.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.ChevronLeft,
-                        contentDescription = "Предыдущий месяц",
-                        tint = palette.textPrimary
-                    )
-                }
-
-                Text(
-                    text = Formatters.formatMonthTitle(selectedYear, selectedMonthZeroBased),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = palette.textPrimary,
-                    modifier = Modifier.padding(horizontal = 6.dp)
-                )
-
-                IconButton(
-                    onClick = onNextMonth,
-                    modifier = Modifier.size(34.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.ChevronRight,
-                        contentDescription = "Следующий месяц",
-                        tint = palette.textPrimary
-                    )
+                BudgetPeriod.entries.forEach { period ->
+                    val selected = window.period == period
+                    Surface(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { onSelectPeriod(period) },
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (selected) palette.accentEmeraldSoft else Color.Transparent
+                    ) {
+                        Text(
+                            text = period.label,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (selected) palette.accentEmerald else palette.textSecondary,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 7.dp)
+                        )
+                    }
                 }
             }
         }
 
-        if (!isCurrentMonth) {
-            Surface(
-                shape = RoundedCornerShape(999.dp),
-                color = palette.accentEmeraldSoft,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(999.dp))
-                    .clickable(onClick = onJumpToCurrentMonth)
+        if (window.period != BudgetPeriod.ALL) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Текущий месяц",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = palette.accentEmerald,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
-                )
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = palette.surfaceCard,
+                    border = BorderStroke(1.dp, palette.outlineSubtle)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                    ) {
+                        IconButton(
+                            onClick = onPrevPeriod,
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.ChevronLeft,
+                                contentDescription = "Предыдущий период",
+                                tint = palette.textPrimary
+                            )
+                        }
+
+                        Text(
+                            text = window.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = palette.textPrimary,
+                            modifier = Modifier.padding(horizontal = 6.dp)
+                        )
+
+                        IconButton(
+                            onClick = onNextPeriod,
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.ChevronRight,
+                                contentDescription = "Следующий период",
+                                tint = palette.textPrimary
+                            )
+                        }
+                    }
+                }
+
+                if (!window.isCurrentPeriod) {
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = palette.accentEmeraldSoft,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable(onClick = onJumpToCurrent)
+                    ) {
+                        Text(
+                            text = "Сейчас",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = palette.accentEmerald,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                        )
+                    }
+                }
             }
         }
     }
@@ -148,14 +194,13 @@ fun ExpensesFeedPane(
     confirmedExpenses: List<ExpenseEntity>,
     pendingPushExpenses: List<ExpenseEntity>,
     report: AiBudgetReport,
-    selectedYear: Int,
-    selectedMonthZeroBased: Int,
-    isCurrentMonth: Boolean,
+    window: PeriodWindow,
     showHeroInline: Boolean,
     isPushAccessGranted: Boolean,
-    onPrevMonth: () -> Unit,
-    onNextMonth: () -> Unit,
-    onJumpToCurrentMonth: () -> Unit,
+    onSelectPeriod: (BudgetPeriod) -> Unit,
+    onPrevPeriod: () -> Unit,
+    onNextPeriod: () -> Unit,
+    onJumpToCurrent: () -> Unit,
     onOpenPushSettings: () -> Unit,
     onConfirmPending: (ExpenseEntity, ExpenseCategory) -> Unit,
     onDismissPending: (ExpenseEntity) -> Unit,
@@ -167,17 +212,17 @@ fun ExpensesFeedPane(
     var activeFilter by remember { mutableStateOf(FeedFilter.ALL) }
     var selectedCategoryFilter by remember { mutableStateOf<ExpenseCategory?>(null) }
 
-    val monthExpenses = remember(confirmedExpenses, selectedYear, selectedMonthZeroBased) {
-        val cal = Calendar.getInstance()
-        confirmedExpenses.filter { exp ->
-            cal.timeInMillis = exp.createdAtEpochMs
-            cal.get(Calendar.YEAR) == selectedYear && cal.get(Calendar.MONTH) == selectedMonthZeroBased
+    val periodExpenses = remember(confirmedExpenses, window) {
+        if (window.period == BudgetPeriod.ALL) {
+            confirmedExpenses
+        } else {
+            confirmedExpenses.filter { it.createdAtEpochMs in window.startMs..window.endMs }
         }
     }
 
-    val filteredExpenses = remember(monthExpenses, searchQuery, activeFilter, selectedCategoryFilter) {
+    val filteredExpenses = remember(periodExpenses, searchQuery, activeFilter, selectedCategoryFilter) {
         val q = searchQuery.trim().lowercase()
-        monthExpenses.filter { exp ->
+        periodExpenses.filter { exp ->
             val matchesQuery = q.isEmpty() ||
                 exp.merchant.lowercase().contains(q) ||
                 exp.category.displayName.lowercase().contains(q)
@@ -211,8 +256,8 @@ fun ExpensesFeedPane(
             }
     }
 
-    val activeCategories = remember(monthExpenses) {
-        monthExpenses.map { it.category }.distinct()
+    val activeCategories = remember(periodExpenses) {
+        periodExpenses.map { it.category }.distinct()
     }
 
     LazyColumn(
@@ -221,23 +266,18 @@ fun ExpensesFeedPane(
         contentPadding = PaddingValues(top = 4.dp, bottom = 96.dp)
     ) {
         item {
-            MonthSwitcherBar(
-                selectedYear = selectedYear,
-                selectedMonthZeroBased = selectedMonthZeroBased,
-                isCurrentMonth = isCurrentMonth,
-                onPrevMonth = onPrevMonth,
-                onNextMonth = onNextMonth,
-                onJumpToCurrentMonth = onJumpToCurrentMonth
+            PeriodSwitcherBar(
+                window = window,
+                onSelectPeriod = onSelectPeriod,
+                onPrevPeriod = onPrevPeriod,
+                onNextPeriod = onNextPeriod,
+                onJumpToCurrent = onJumpToCurrent
             )
         }
 
         if (showHeroInline) {
             item {
-                HeroBudgetCard(
-                    report = report,
-                    monthZeroBased = selectedMonthZeroBased,
-                    year = selectedYear
-                )
+                HeroBudgetCard(report = report)
             }
         }
 
@@ -284,7 +324,7 @@ fun ExpensesFeedPane(
         }
 
         // Search & Quick Filter Bar
-        if (monthExpenses.isNotEmpty() || searchQuery.isNotBlank()) {
+        if (periodExpenses.isNotEmpty() || searchQuery.isNotBlank()) {
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     SearchInputPill(
@@ -335,7 +375,7 @@ fun ExpensesFeedPane(
         if (groupedByDay.isEmpty()) {
             item {
                 EmptyFeedCard(
-                    hasMonthExpenses = monthExpenses.isNotEmpty(),
+                    hasPeriodExpenses = periodExpenses.isNotEmpty(),
                     onResetFilters = {
                         searchQuery = ""
                         activeFilter = FeedFilter.ALL
@@ -365,7 +405,7 @@ fun ExpensesFeedPane(
                         ) {
                             if (group.dayIncomeTotal > 0.0) {
                                 Text(
-                                    text = "+${Formatters.formatRub(group.dayIncomeTotal)}",
+                                    text = "+${Formatters.formatRub(group.dayIncomeTotal, true)}",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = palette.accentEmerald,
                                     fontWeight = FontWeight.SemiBold
@@ -373,7 +413,7 @@ fun ExpensesFeedPane(
                             }
                             if (group.dayExpenseTotal > 0.0) {
                                 Text(
-                                    text = Formatters.formatRub(group.dayExpenseTotal),
+                                    text = Formatters.formatRub(group.dayExpenseTotal, true),
                                     style = MaterialTheme.typography.labelMedium,
                                     color = palette.textMuted,
                                     fontWeight = FontWeight.SemiBold
@@ -434,7 +474,6 @@ private fun ExpenseTransactionRow(
         "PUSH_SBER" -> "Сбер"
         "PUSH_MIRPAY" -> "Mir Pay"
         "QR_RECEIPT" -> "Чек ФНС"
-        "IMPORT_MM" -> null
         else -> null
     }
 
@@ -618,7 +657,7 @@ private fun FilterPillChip(
 
 @Composable
 private fun EmptyFeedCard(
-    hasMonthExpenses: Boolean,
+    hasPeriodExpenses: Boolean,
     onResetFilters: () -> Unit,
     onAddClick: () -> Unit
 ) {
@@ -653,16 +692,16 @@ private fun EmptyFeedCard(
             }
 
             Text(
-                text = if (hasMonthExpenses) "Ничего не найдено" else "В этом месяце пока чисто",
+                text = if (hasPeriodExpenses) "Ничего не найдено" else "За этот период операций нет",
                 style = MaterialTheme.typography.titleMedium,
                 color = palette.textPrimary
             )
 
             Text(
-                text = if (hasMonthExpenses) {
+                text = if (hasPeriodExpenses) {
                     "Попробуйте изменить поисковый запрос или сбросить фильтр."
                 } else {
-                    "Добавьте операцию вручную, отсканируйте QR-код чека ФНС или переключите месяц выше."
+                    "Добавьте операцию вручную, отсканируйте QR-код чека ФНС или переключите период выше."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = palette.textSecondary,
@@ -672,14 +711,14 @@ private fun EmptyFeedCard(
             Spacer(modifier = Modifier.height(2.dp))
 
             Button(
-                onClick = if (hasMonthExpenses) onResetFilters else onAddClick,
+                onClick = if (hasPeriodExpenses) onResetFilters else onAddClick,
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = palette.accentEmerald,
                     contentColor = Color.White
                 )
             ) {
-                if (!hasMonthExpenses) {
+                if (!hasPeriodExpenses) {
                     Icon(
                         imageVector = Icons.Rounded.Add,
                         contentDescription = null,
@@ -688,7 +727,7 @@ private fun EmptyFeedCard(
                     Spacer(modifier = Modifier.width(6.dp))
                 }
                 Text(
-                    text = if (hasMonthExpenses) "Сбросить фильтры" else "Добавить операцию",
+                    text = if (hasPeriodExpenses) "Сбросить фильтры" else "Добавить операцию",
                     fontWeight = FontWeight.SemiBold
                 )
             }

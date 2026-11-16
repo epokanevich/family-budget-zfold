@@ -62,6 +62,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -96,7 +97,8 @@ import ru.pokanevich.familybudget.ui.theme.AppThemeMode
 import ru.pokanevich.familybudget.ui.theme.AuthorAvatarCircle
 import ru.pokanevich.familybudget.ui.theme.FamilyBudgetTheme
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
-import java.util.Calendar
+import ru.pokanevich.familybudget.ui.util.BudgetPeriod
+import ru.pokanevich.familybudget.ui.util.PeriodCalculator
 
 class MainActivity : ComponentActivity() {
 
@@ -181,13 +183,12 @@ fun FamilyBudgetApp(
     var autoConfirmPush by remember { mutableStateOf(repository.prefs.autoConfirmBankPush) }
     var geminiApiKey by remember { mutableStateOf(repository.prefs.geminiApiKey) }
 
-    // Month selection state
-    val nowCal = remember { Calendar.getInstance() }
-    val currentYear = nowCal.get(Calendar.YEAR)
-    val currentMonth = nowCal.get(Calendar.MONTH)
-    var selectedYear by remember { mutableIntStateOf(currentYear) }
-    var selectedMonth by remember { mutableIntStateOf(currentMonth) }
-    val isCurrentMonth = (selectedYear == currentYear && selectedMonth == currentMonth)
+    // Period & Date navigation state
+    var selectedPeriod by remember { mutableStateOf(BudgetPeriod.MONTH) }
+    var anchorEpochMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val periodWindow = remember(selectedPeriod, anchorEpochMs) {
+        PeriodCalculator.buildWindow(selectedPeriod, anchorEpochMs)
+    }
 
     // Dialog / BottomSheet states
     var showAddEditSheet by remember { mutableStateOf(false) }
@@ -220,24 +221,19 @@ fun FamilyBudgetApp(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val aiReport = remember(confirmedExpenses, monthlyBudgetRub, selectedYear, selectedMonth) {
+    val aiReport = remember(confirmedExpenses, monthlyBudgetRub, periodWindow) {
         AiBudgetAdvisor.buildInstantLocalReport(
             expenses = confirmedExpenses,
             monthlyBudgetRub = monthlyBudgetRub,
-            targetYear = selectedYear,
-            targetMonth = selectedMonth
+            window = periodWindow
         )
     }
 
-    val stepMonth: (Int) -> Unit = { delta ->
-        val cal = Calendar.getInstance().apply {
-            set(Calendar.YEAR, selectedYear)
-            set(Calendar.MONTH, selectedMonth)
-            set(Calendar.DAY_OF_MONTH, 1)
-            add(Calendar.MONTH, delta)
-        }
-        selectedYear = cal.get(Calendar.YEAR)
-        selectedMonth = cal.get(Calendar.MONTH)
+    val stepPeriod: (Int) -> Unit = { delta ->
+        anchorEpochMs = PeriodCalculator.stepAnchor(selectedPeriod, anchorEpochMs, delta)
+    }
+    val jumpToCurrent: () -> Unit = {
+        anchorEpochMs = System.currentTimeMillis()
     }
 
     Scaffold(
@@ -391,17 +387,13 @@ fun FamilyBudgetApp(
                         confirmedExpenses = confirmedExpenses,
                         pendingPushExpenses = pendingPushExpenses,
                         report = aiReport,
-                        selectedYear = selectedYear,
-                        selectedMonthZeroBased = selectedMonth,
-                        isCurrentMonth = isCurrentMonth,
+                        window = periodWindow,
                         showHeroInline = false,
                         isPushAccessGranted = isPushAccessGranted,
-                        onPrevMonth = { stepMonth(-1) },
-                        onNextMonth = { stepMonth(1) },
-                        onJumpToCurrentMonth = {
-                            selectedYear = currentYear
-                            selectedMonth = currentMonth
-                        },
+                        onSelectPeriod = { selectedPeriod = it },
+                        onPrevPeriod = { stepPeriod(-1) },
+                        onNextPeriod = { stepPeriod(1) },
+                        onJumpToCurrent = jumpToCurrent,
                         onOpenPushSettings = {
                             context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                         },
@@ -429,9 +421,13 @@ fun FamilyBudgetApp(
                     AiAnalyticsPane(
                         report = aiReport,
                         geminiApiKey = geminiApiKey,
-                        selectedYear = selectedYear,
-                        selectedMonthZeroBased = selectedMonth,
+                        window = periodWindow,
+                        showPeriodSwitcher = false,
                         showHeroAtTop = true,
+                        onSelectPeriod = { selectedPeriod = it },
+                        onPrevPeriod = { stepPeriod(-1) },
+                        onNextPeriod = { stepPeriod(1) },
+                        onJumpToCurrent = jumpToCurrent,
                         onOpenSettings = { showSettingsSheet = true }
                     )
                 }
@@ -449,17 +445,13 @@ fun FamilyBudgetApp(
                         confirmedExpenses = confirmedExpenses,
                         pendingPushExpenses = pendingPushExpenses,
                         report = aiReport,
-                        selectedYear = selectedYear,
-                        selectedMonthZeroBased = selectedMonth,
-                        isCurrentMonth = isCurrentMonth,
+                        window = periodWindow,
                         showHeroInline = true,
                         isPushAccessGranted = isPushAccessGranted,
-                        onPrevMonth = { stepMonth(-1) },
-                        onNextMonth = { stepMonth(1) },
-                        onJumpToCurrentMonth = {
-                            selectedYear = currentYear
-                            selectedMonth = currentMonth
-                        },
+                        onSelectPeriod = { selectedPeriod = it },
+                        onPrevPeriod = { stepPeriod(-1) },
+                        onNextPeriod = { stepPeriod(1) },
+                        onJumpToCurrent = jumpToCurrent,
                         onOpenPushSettings = {
                             context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                         },
@@ -481,9 +473,13 @@ fun FamilyBudgetApp(
                     AiAnalyticsPane(
                         report = aiReport,
                         geminiApiKey = geminiApiKey,
-                        selectedYear = selectedYear,
-                        selectedMonthZeroBased = selectedMonth,
+                        window = periodWindow,
+                        showPeriodSwitcher = true,
                         showHeroAtTop = true,
+                        onSelectPeriod = { selectedPeriod = it },
+                        onPrevPeriod = { stepPeriod(-1) },
+                        onNextPeriod = { stepPeriod(1) },
+                        onJumpToCurrent = jumpToCurrent,
                         onOpenSettings = { showSettingsSheet = true }
                     )
                 }
