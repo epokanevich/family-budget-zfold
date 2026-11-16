@@ -16,7 +16,7 @@ class FamilyPreferences(context: Context) {
         set(value) = prefs.edit().putString("family_space_code", value.trim().uppercase()).apply()
 
     var monthlyBudgetRub: Double
-        get() = prefs.getFloat("monthly_budget_rub", 120000f).toDouble()
+        get() = prefs.getFloat("monthly_budget_rub", 200000f).toDouble()
         set(value) = prefs.edit().putFloat("monthly_budget_rub", value.toFloat()).apply()
 
     var autoConfirmBankPush: Boolean

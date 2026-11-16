@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,6 +64,12 @@ import ru.pokanevich.familybudget.ui.theme.visual
 import ru.pokanevich.familybudget.ui.util.Formatters
 import kotlin.math.roundToInt
 
+private data class ChartSlice(
+    val category: ExpenseCategory,
+    val amountRub: Double,
+    val count: Int
+)
+
 @Composable
 fun AiAnalyticsPane(
     report: AiBudgetReport,
@@ -80,6 +85,7 @@ fun AiAnalyticsPane(
     var cloudAdvice by remember { mutableStateOf<String?>(null) }
     var isLoadingCloudAi by remember { mutableStateOf(false) }
     var selectedChartCategory by remember { mutableStateOf<ExpenseCategory?>(null) }
+    var showIncomesInChart by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -95,19 +101,24 @@ fun AiAnalyticsPane(
             )
         }
 
-        // 1. Donut Chart Card (Tricount / Settle Up / Splittr Style)
+        // 1. Donut Chart Card with Расходы / Доходы Toggle
         CategoryDonutCard(
             report = report,
+            showIncomes = showIncomesInChart,
+            onToggleMode = { incomesMode ->
+                showIncomesInChart = incomesMode
+                selectedChartCategory = null
+            },
             selectedCategory = selectedChartCategory,
             onSelectCategory = { cat ->
                 selectedChartCategory = if (selectedChartCategory == cat) null else cat
             }
         )
 
-        // 2. Category Pace & Limits Card
+        // 2. Category Pace & Limits Card (for Expenses)
         CategoryPaceBreakdownCard(report = report)
 
-        // 3. Family Member Contribution Card (Non-debt Shared Pot)
+        // 3. Family Member Contribution & Cashflow Card
         CoupleContributionCard(report = report)
 
         // 4. AI Financial Verdict & Gemini Advisor Card
@@ -245,23 +256,36 @@ fun AiAnalyticsPane(
 @Composable
 private fun CategoryDonutCard(
     report: AiBudgetReport,
+    showIncomes: Boolean,
+    onToggleMode: (Boolean) -> Unit,
     selectedCategory: ExpenseCategory?,
     onSelectCategory: (ExpenseCategory) -> Unit
 ) {
     val palette = LocalFamilyPalette.current
-    val nonZero = remember(report.allCategories) {
-        report.allCategories
-            .filter { it.spentRub > 0.0 }
-            .sortedByDescending { it.spentRub }
+    val slices = remember(report, showIncomes) {
+        if (showIncomes) {
+            report.incomeBreakdown
+                .filter { it.amountRub > 0.0 }
+                .sortedByDescending { it.amountRub }
+                .map { ChartSlice(it.category, it.amountRub, it.transactionCount) }
+        } else {
+            report.allCategories
+                .filter { it.spentRub > 0.0 }
+                .sortedByDescending { it.spentRub }
+                .map { ChartSlice(it.category, it.spentRub, it.transactionCount) }
+        }
     }
-    val total = report.totalSpentThisMonthRub.coerceAtLeast(0.0)
+
+    val total = if (showIncomes) report.totalIncomeThisMonthRub else report.totalSpentThisMonthRub
+    val totalTx = if (showIncomes) report.totalIncomeTransactions else report.totalExpenseTransactions
+
     val sweepScale by animateFloatAsState(
-        targetValue = if (nonZero.isNotEmpty()) 1f else 0f,
+        targetValue = if (slices.isNotEmpty()) 1f else 0f,
         animationSpec = tween(durationMillis = 700),
         label = "donutSweep"
     )
 
-    val selectedDiag = nonZero.firstOrNull { it.category == selectedCategory }
+    val selectedSlice = slices.firstOrNull { it.category == selectedCategory }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -274,23 +298,57 @@ private fun CategoryDonutCard(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.PieChart,
-                    contentDescription = null,
-                    tint = palette.accentEmerald,
-                    modifier = Modifier.size(20.dp)
-                )
-                Text(
-                    text = "Структура расходов",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = palette.textPrimary
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.PieChart,
+                        contentDescription = null,
+                        tint = palette.accentEmerald,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "Структура",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = palette.textPrimary
+                    )
+                }
+
+                // Segmented pill: Расходы / Доходы
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = palette.surfaceElevated
+                ) {
+                    Row(modifier = Modifier.padding(3.dp)) {
+                        listOf(false to "Расходы", true to "Доходы").forEach { (isInc, title) ->
+                            val active = showIncomes == isInc
+                            Surface(
+                                shape = RoundedCornerShape(9.dp),
+                                color = if (active) palette.surfaceCard else Color.Transparent,
+                                shadowElevation = if (active && !palette.isDark) 1.dp else 0.dp,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(9.dp))
+                                    .clickable { onToggleMode(isInc) }
+                            ) {
+                                Text(
+                                    text = title,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (active) palette.textPrimary else palette.textSecondary,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                )
+                            }
+                        }
+                    }
+                }
             }
 
-            if (nonZero.isEmpty()) {
+            if (slices.isEmpty() || total <= 0.0) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -298,7 +356,11 @@ private fun CategoryDonutCard(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "Появится после первой траты за этот месяц",
+                        text = if (showIncomes) {
+                            "Нет записей доходов за выбранный месяц"
+                        } else {
+                            "Появится после первой траты за этот месяц"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.textMuted,
                         textAlign = TextAlign.Center
@@ -312,20 +374,20 @@ private fun CategoryDonutCard(
                         .height(176.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    val gapDegrees = if (nonZero.size > 1) 3.2f else 0f
-                    val availableDegrees = 360f - gapDegrees * nonZero.size
+                    val gapDegrees = if (slices.size > 1) 2.8f else 0f
+                    val availableDegrees = 360f - gapDegrees * slices.size
 
                     Canvas(modifier = Modifier.size(156.dp)) {
                         val baseStroke = 21.dp.toPx()
                         val selectedExtra = 5.dp.toPx()
                         var startAngle = -90f
 
-                        nonZero.forEach { diag ->
-                            val share = (diag.spentRub / total).toFloat().coerceIn(0f, 1f)
+                        slices.forEach { slice ->
+                            val share = (slice.amountRub / total).toFloat().coerceIn(0f, 1f)
                             val sweep = share * availableDegrees * sweepScale
-                            val vis = diag.category.visual()
+                            val vis = slice.category.visual()
                             val sliceColor = if (palette.isDark) vis.darkModeColor else vis.color
-                            val isSelected = selectedCategory == diag.category
+                            val isSelected = selectedCategory == slice.category
                             val isDimmed = selectedCategory != null && !isSelected
 
                             val strokeWidth = if (isSelected) baseStroke + selectedExtra else baseStroke
@@ -348,30 +410,30 @@ private fun CategoryDonutCard(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.padding(horizontal = 32.dp)
                     ) {
-                        if (selectedDiag != null) {
-                            val pct = ((selectedDiag.spentRub / total) * 100.0).roundToInt()
+                        if (selectedSlice != null) {
+                            val pct = ((selectedSlice.amountRub / total) * 100.0).roundToInt()
                             Text(
-                                text = selectedDiag.category.shortName,
+                                text = selectedSlice.category.shortName,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = palette.textSecondary,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
-                                text = Formatters.formatRub(selectedDiag.spentRub),
+                                text = Formatters.formatRub(selectedSlice.amountRub),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold,
                                 color = palette.textPrimary
                             )
                             Text(
-                                text = "$pct% от всех трат",
+                                text = "$pct% • ${selectedSlice.count} оп.",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = palette.accentEmerald,
                                 fontWeight = FontWeight.SemiBold
                             )
                         } else {
                             Text(
-                                text = "Всего",
+                                text = if (showIncomes) "Доходы" else "Расходы",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = palette.textSecondary
                             )
@@ -379,10 +441,10 @@ private fun CategoryDonutCard(
                                 text = Formatters.formatRub(total),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.ExtraBold,
-                                color = palette.textPrimary
+                                color = if (showIncomes) palette.accentEmerald else palette.textPrimary
                             )
                             Text(
-                                text = "${report.totalTransactions} оп.",
+                                text = "$totalTx оп.",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = palette.textMuted
                             )
@@ -392,22 +454,22 @@ private fun CategoryDonutCard(
 
                 // Interactive 2-column Legend
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    nonZero.chunked(2).forEach { pair ->
+                    slices.chunked(2).forEach { pair ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            pair.forEach { diag ->
-                                val vis = diag.category.visual()
+                            pair.forEach { slice ->
+                                val vis = slice.category.visual()
                                 val dotColor = if (palette.isDark) vis.darkModeColor else vis.color
-                                val pct = ((diag.spentRub / total) * 100.0).roundToInt()
-                                val isSelected = selectedCategory == diag.category
+                                val pct = ((slice.amountRub / total) * 100.0).roundToInt()
+                                val isSelected = selectedCategory == slice.category
 
                                 Surface(
                                     modifier = Modifier
                                         .weight(1f)
                                         .clip(RoundedCornerShape(12.dp))
-                                        .clickable { onSelectCategory(diag.category) },
+                                        .clickable { onSelectCategory(slice.category) },
                                     shape = RoundedCornerShape(12.dp),
                                     color = if (isSelected) dotColor.copy(alpha = 0.14f) else palette.surfaceElevated,
                                     border = if (isSelected) BorderStroke(1.dp, dotColor) else null
@@ -425,7 +487,7 @@ private fun CategoryDonutCard(
                                         )
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = diag.category.shortName,
+                                                text = slice.category.shortName,
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = palette.textPrimary,
                                                 fontWeight = FontWeight.SemiBold,
@@ -433,7 +495,7 @@ private fun CategoryDonutCard(
                                                 overflow = TextOverflow.Ellipsis
                                             )
                                             Text(
-                                                text = Formatters.formatRub(diag.spentRub),
+                                                text = Formatters.formatRub(slice.amountRub),
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = palette.textSecondary,
                                                 maxLines = 1
@@ -463,10 +525,12 @@ private fun CategoryDonutCard(
 private fun CategoryPaceBreakdownCard(report: AiBudgetReport) {
     val palette = LocalFamilyPalette.current
     val sorted = remember(report.allCategories) {
-        report.allCategories.sortedWith(
-            compareByDescending<CategoryDiagnosis> { it.spentRub > 0 }
-                .thenByDescending { it.spentRub / it.recommendedLimitRub.coerceAtLeast(1.0) }
-        )
+        report.allCategories
+            .filter { it.spentRub > 0.0 || it.recommendedLimitRub >= 10000 }
+            .sortedWith(
+                compareByDescending<CategoryDiagnosis> { it.spentRub > 0 }
+                    .thenByDescending { it.spentRub }
+            )
     }
 
     Surface(
@@ -549,7 +613,7 @@ private fun CategoryPaceRow(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = diag.category.shortName,
+                    text = diag.category.displayName,
                     style = MaterialTheme.typography.titleSmall,
                     color = palette.textPrimary,
                     maxLines = 1,
@@ -572,14 +636,13 @@ private fun CategoryPaceRow(
                     color = palette.textPrimary
                 )
                 Text(
-                    text = "из ${Formatters.formatRub(diag.recommendedLimitRub)}",
+                    text = "ориентир ${Formatters.formatRub(diag.recommendedLimitRub)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = palette.textMuted
                 )
             }
         }
 
-        // Progress bar with calendar pace marker
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -627,6 +690,8 @@ private fun CoupleContributionCard(report: AiBudgetReport) {
         100 - eugenePct
     } else 50
 
+    val netCashflow = report.totalIncomeThisMonthRub - report.totalSpentThisMonthRub
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -643,15 +708,19 @@ private fun CoupleContributionCard(report: AiBudgetReport) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Участие в общем котле",
+                    text = "Баланс и участие пары",
                     style = MaterialTheme.typography.titleMedium,
                     color = palette.textPrimary
                 )
                 Text(
-                    text = "Без долгов",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.accentEmerald,
-                    fontWeight = FontWeight.SemiBold
+                    text = if (netCashflow >= 0) {
+                        "+${Formatters.formatRub(netCashflow)}"
+                    } else {
+                        "-${Formatters.formatRub(-netCashflow)}"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (netCashflow >= 0) palette.accentEmerald else palette.accentCoral,
+                    fontWeight = FontWeight.Bold
                 )
             }
 
@@ -677,7 +746,6 @@ private fun CoupleContributionCard(report: AiBudgetReport) {
                 )
             }
 
-            // Combined ratio bar
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

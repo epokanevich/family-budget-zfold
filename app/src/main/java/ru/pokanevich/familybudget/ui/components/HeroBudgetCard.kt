@@ -66,7 +66,7 @@ fun HeroBudgetCard(
 
     val statusText = when {
         isOverBudget -> "Перерасход +${Formatters.formatRub(report.totalSpentThisMonthRub - report.monthlyBudgetRub)}"
-        !report.isCurrentMonth -> "${report.totalTransactions} операций"
+        !report.isCurrentMonth -> "${report.totalExpenseTransactions} расходов"
         paceDelta >= budget * 0.03 -> "Запас +${Formatters.formatRub(paceDelta)}"
         paceDelta <= -budget * 0.03 -> "Темп +${Formatters.formatRub(abs(paceDelta))}"
         else -> "Ровно по плану"
@@ -98,7 +98,6 @@ fun HeroBudgetCard(
                     )
                 )
         ) {
-            // Subtle fintech geometric background rings
             Canvas(modifier = Modifier.matchParentSize()) {
                 drawCircle(
                     color = Color.White.copy(alpha = 0.05f),
@@ -118,7 +117,6 @@ fun HeroBudgetCard(
                     .padding(18.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Header Row
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -153,25 +151,31 @@ fun HeroBudgetCard(
                     }
                 }
 
-                // Big Amount Row
+                // Big Amount Row + Monthly Income pill
                 Row(
-                    verticalAlignment = Alignment.Bottom,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom
                 ) {
-                    Text(
-                        text = Formatters.formatRub(report.totalSpentThisMonthRub),
-                        style = MaterialTheme.typography.headlineLarge,
-                        color = Color.White
-                    )
-                    Text(
-                        text = "из ${Formatters.formatRub(report.monthlyBudgetRub)}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White.copy(alpha = 0.72f),
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    )
+                    Row(
+                        verticalAlignment = Alignment.Bottom,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = Formatters.formatRub(report.totalSpentThisMonthRub),
+                            style = MaterialTheme.typography.headlineLarge,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "из ${Formatters.formatRub(report.monthlyBudgetRub)}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.72f),
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        )
+                    }
                 }
 
-                // Progress bar with today's calendar pace tick
+                // Progress bar with calendar pace marker
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -216,25 +220,23 @@ fun HeroBudgetCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    HeroMiniMetric(
+                        label = "Доходы",
+                        value = "+${Formatters.formatRub(report.totalIncomeThisMonthRub)}",
+                        valueColor = Color(0xFF6EE7B7),
+                        modifier = Modifier.weight(1.05f)
+                    )
+
                     val remaining = report.monthlyBudgetRub - report.totalSpentThisMonthRub
                     HeroMiniMetric(
                         label = if (remaining >= 0) "Остаток" else "Перерасход",
                         value = Formatters.formatRub(abs(remaining)),
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    HeroMiniMetric(
-                        label = if (report.isCurrentMonth) "Ритм/день" else "Операций",
-                        value = if (report.isCurrentMonth) {
-                            "${Formatters.formatRub(report.safeDailySpendRemainingRub)}"
-                        } else {
-                            "${report.totalTransactions}"
-                        },
+                        valueColor = Color.White,
                         modifier = Modifier.weight(1f)
                     )
 
                     Column(
-                        modifier = Modifier.weight(1.15f),
+                        modifier = Modifier.weight(1.05f),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Row(
@@ -303,6 +305,7 @@ fun HeroBudgetCard(
 private fun HeroMiniMetric(
     label: String,
     value: String,
+    valueColor: Color,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -315,7 +318,7 @@ private fun HeroMiniMetric(
         Text(
             text = value,
             style = MaterialTheme.typography.titleSmall,
-            color = Color.White,
+            color = valueColor,
             fontWeight = FontWeight.Bold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

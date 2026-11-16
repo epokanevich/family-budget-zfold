@@ -83,6 +83,7 @@ import kotlinx.coroutines.launch
 import ru.pokanevich.familybudget.ai.AiBudgetAdvisor
 import ru.pokanevich.familybudget.data.BudgetRepository
 import ru.pokanevich.familybudget.data.ExpenseEntity
+import ru.pokanevich.familybudget.data.MoneyManagerImporter
 import ru.pokanevich.familybudget.data.SyncState
 import ru.pokanevich.familybudget.scanner.QrScannerDialog
 import ru.pokanevich.familybudget.service.BankPushParser
@@ -196,6 +197,8 @@ fun FamilyBudgetApp(
     var showSettingsSheet by remember { mutableStateOf(false) }
     var prefilledAmount by remember { mutableStateOf("") }
     var prefilledMerchant by remember { mutableStateOf("") }
+    var isImportingBackup by remember { mutableStateOf(false) }
+    var importStatusMessage by remember { mutableStateOf<String?>(null) }
 
     var selectedTab by remember { mutableIntStateOf(0) }
 
@@ -318,7 +321,7 @@ fun FamilyBudgetApp(
                 containerColor = palette.accentEmerald,
                 contentColor = Color.White,
                 icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                text = { Text("Трата ₽", fontWeight = FontWeight.Bold) }
+                text = { Text("Операция ₽", fontWeight = FontWeight.Bold) }
             )
         },
         bottomBar = {
@@ -588,6 +591,8 @@ fun FamilyBudgetApp(
             themeMode = themeMode,
             syncState = syncState,
             isPushAccessGranted = isPushAccessGranted,
+            isImportingBackup = isImportingBackup,
+            importStatusMessage = importStatusMessage,
             onOpenPushSettings = {
                 context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             },
@@ -606,6 +611,27 @@ fun FamilyBudgetApp(
                             rawText = sample.rawText
                         )
                     }
+                }
+            },
+            onImportBackupUri = { uri ->
+                isImportingBackup = true
+                importStatusMessage = null
+                scope.launch {
+                    val res = MoneyManagerImporter.importFromBackupUri(
+                        context = context,
+                        uri = uri,
+                        defaultAuthorName = currentUserName,
+                        repository = repository
+                    )
+                    importStatusMessage = res.fold(
+                        onSuccess = { info ->
+                            "Готово: найдено ${info.parsedTotal} (${info.expenseCount} расх., ${info.incomeCount} дох.), новых добавлено ${info.newlyAdded}"
+                        },
+                        onFailure = { err ->
+                            "Ошибка импорта: ${err.message}"
+                        }
+                    )
+                    isImportingBackup = false
                 }
             },
             onSyncNow = {

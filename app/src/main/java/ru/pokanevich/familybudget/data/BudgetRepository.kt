@@ -36,6 +36,11 @@ class BudgetRepository private constructor(context: Context) {
     private val syncMutex = Mutex()
     private var pollingJob: Job? = null
 
+    private var cachedFamilyCode: String? = null
+    private var cachedEtag: String? = null
+    private var cachedRemoteSha: String? = null
+    private var cachedRemoteMap: Map<String, ExpenseEntity> = emptyMap()
+
     private val _syncState = MutableStateFlow(SyncState.OFFLINE_READY)
     val syncState: StateFlow<SyncState> = _syncState
 
@@ -52,14 +57,14 @@ class BudgetRepository private constructor(context: Context) {
     /**
      * Запускает двустороннюю облачную синхронизацию между двумя смартфонами
      * через приватный GitHub-репозиторий epokanevich/family-budget-sync-db.
-     * Слияние выполняется по правилу Last-Write-Wins для каждого UUIDv4 без потери записей.
+     * Использует ETag (304 Not Modified) для экономии трафика и пакетный Room upsertAll.
      */
     fun startRealtimeSync() {
         pollingJob?.cancel()
         pollingJob = scope.launch {
             while (isActive) {
                 syncWithCloudNow()
-                delay(12_000L) // Автообновление каждые 12 секунд
+                delay(15_000L)
             }
         }
     }
@@ -69,140 +74,214 @@ class BudgetRepository private constructor(context: Context) {
             _isSyncing.value = true
             try {
                 runCatching {
-                val token = prefs.githubSyncToken
-                if (token.isBlank()) {
-                    _syncState.value = SyncState.OFFLINE_READY
-                    return@withLock
-                }
-
-                val familyCode = prefs.familySpaceCode.ifBlank { "POKANE-FAMILY" }
-                    .replace(Regex("[^A-Za-z0-9_-]"), "_")
-                val filePath = "families/$familyCode/expenses.json"
-                val apiUrl = "https://api.github.com/repos/epokanevich/family-budget-sync-db/contents/$filePath"
-
-                // 1. Загружаем текущее состояние из облака
-                var remoteSha: String? = null
-                val remoteMap = mutableMapOf<String, ExpenseEntity>()
-
-                val getConn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    setRequestProperty("Authorization", "token $token")
-                    setRequestProperty("Accept", "application/vnd.github+json")
-                    setRequestProperty("User-Agent", "FamilyBudgetZFold")
-                    connectTimeout = 10_000
-                    readTimeout = 10_000
-                }
-
-                val getCode = getConn.responseCode
-                if (getCode in 200..299) {
-                    val body = getConn.inputStream.bufferedReader().readText()
-                    val fileObj = JSONObject(body)
-                    remoteSha = fileObj.optString("sha", "").ifBlank { null }
-                    val contentB64 = fileObj.optString("content", "").replace("\n", "").replace("\r", "")
-                    if (contentB64.isNotBlank()) {
-                        val decodedJson = String(Base64.decode(contentB64, Base64.DEFAULT), Charsets.UTF_8)
-                        val arr = JSONArray(decodedJson)
-                        for (i in 0 until arr.length()) {
-                            val itemObj = arr.optJSONObject(i) ?: continue
-                            val parsed = ExpenseEntity.fromJsonObject(itemObj) ?: continue
-                            remoteMap[parsed.id] = parsed
-                        }
+                    val token = prefs.githubSyncToken
+                    if (token.isBlank()) {
+                        _syncState.value = SyncState.OFFLINE_READY
+                        return@withLock
                     }
-                } else if (getCode != 404) {
-                    throw IllegalStateException("GitHub Sync HTTP $getCode")
-                }
 
-                // 2. Сливаем локальные записи Room и облачные записи по UUIDv4
-                val localList = dao.getAllExpenses()
-                val localMap = localList.associateBy { it.id }
+                    val familyCode = prefs.familySpaceCode.ifBlank { "POKANE-FAMILY" }
+                        .replace(Regex("[^A-Za-z0-9_-]"), "_")
 
-                var needCloudPush = remoteSha == null
-                val mergedMap = mutableMapOf<String, ExpenseEntity>()
+                    if (cachedFamilyCode != familyCode) {
+                        cachedFamilyCode = familyCode
+                        cachedEtag = null
+                        cachedRemoteSha = null
+                        cachedRemoteMap = emptyMap()
+                    }
 
-                val allIds = (remoteMap.keys + localMap.keys).toSet()
-                for (id in allIds) {
-                    val loc = localMap[id]
-                    val rem = remoteMap[id]
-                    when {
-                        loc != null && rem == null -> {
-                            mergedMap[id] = loc.copy(isSynced = true)
-                            needCloudPush = true
+                    val filePath = "families/$familyCode/expenses.json"
+                    val apiUrl = "https://api.github.com/repos/epokanevich/family-budget-sync-db/contents/$filePath"
+
+                    var remoteSha: String? = null
+                    val remoteMap = mutableMapOf<String, ExpenseEntity>()
+
+                    val getConn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
+                        requestMethod = "GET"
+                        setRequestProperty("Authorization", "token $token")
+                        setRequestProperty("Accept", "application/vnd.github+json")
+                        setRequestProperty("User-Agent", "FamilyBudgetZFold")
+                        if (!cachedEtag.isNullOrBlank()) {
+                            setRequestProperty("If-None-Match", cachedEtag)
                         }
-                        loc == null && rem != null -> {
-                            val syncedRem = rem.copy(isSynced = true)
-                            mergedMap[id] = syncedRem
-                            dao.upsert(syncedRem)
+                        connectTimeout = 15_000
+                        readTimeout = 25_000
+                    }
+
+                    val getCode = getConn.responseCode
+                    if (getCode == HttpURLConnection.HTTP_NOT_MODIFIED) {
+                        remoteSha = cachedRemoteSha
+                        remoteMap.putAll(cachedRemoteMap)
+
+                        // Если локально ничего не изменилось и облако не менялось — завершаем мгновенно
+                        val unsynced = dao.getUnsyncedExpenses()
+                        if (unsynced.isEmpty()) {
+                            _syncState.value = SyncState.CLOUD_CONNECTED
+                            return@withLock
                         }
-                        loc != null && rem != null -> {
-                            if (loc.updatedAtEpochMs > rem.updatedAtEpochMs) {
+                    } else if (getCode in 200..299) {
+                        val body = getConn.inputStream.bufferedReader().readText()
+                        val fileObj = JSONObject(body)
+                        remoteSha = fileObj.optString("sha", "").ifBlank { null }
+                        var contentB64 = fileObj.optString("content", "")
+                            .replace("\n", "")
+                            .replace("\r", "")
+
+                        // Для файлов > 1 МБ GitHub Contents API возвращает пустой content — читаем Git Blob до 100 МБ
+                        if (contentB64.isBlank() && remoteSha != null) {
+                            val blobUrl = "https://api.github.com/repos/epokanevich/family-budget-sync-db/git/blobs/$remoteSha"
+                            val blobConn = (URL(blobUrl).openConnection() as HttpURLConnection).apply {
+                                requestMethod = "GET"
+                                setRequestProperty("Authorization", "token $token")
+                                setRequestProperty("Accept", "application/vnd.github+json")
+                                setRequestProperty("User-Agent", "FamilyBudgetZFold")
+                                connectTimeout = 15_000
+                                readTimeout = 30_000
+                            }
+                            if (blobConn.responseCode in 200..299) {
+                                val blobBody = blobConn.inputStream.bufferedReader().readText()
+                                contentB64 = JSONObject(blobBody)
+                                    .optString("content", "")
+                                    .replace("\n", "")
+                                    .replace("\r", "")
+                            } else {
+                                throw IllegalStateException("GitHub Blob HTTP ${blobConn.responseCode}")
+                            }
+                        }
+
+                        if (contentB64.isNotBlank()) {
+                            val decodedJson = String(Base64.decode(contentB64, Base64.DEFAULT), Charsets.UTF_8)
+                            val arr = JSONArray(decodedJson)
+                            for (i in 0 until arr.length()) {
+                                val itemObj = arr.optJSONObject(i) ?: continue
+                                val parsed = ExpenseEntity.fromJsonObject(itemObj) ?: continue
+                                remoteMap[parsed.id] = parsed
+                            }
+                        }
+
+                        cachedEtag = getConn.getHeaderField("ETag")
+                        cachedRemoteSha = remoteSha
+                        cachedRemoteMap = remoteMap.toMap()
+                    } else if (getCode != 404) {
+                        throw IllegalStateException("GitHub Sync HTTP $getCode")
+                    }
+
+                    // 2. Сливаем локальные записи Room и облачные записи по UUIDv4 (Last-Write-Wins)
+                    val localList = dao.getAllExpenses()
+                    val localMap = localList.associateBy { it.id }
+
+                    var needCloudPush = remoteSha == null
+                    val mergedMap = mutableMapOf<String, ExpenseEntity>()
+                    val toUpsertLocally = mutableListOf<ExpenseEntity>()
+
+                    val allIds = (remoteMap.keys + localMap.keys).toSet()
+                    for (id in allIds) {
+                        val loc = localMap[id]
+                        val rem = remoteMap[id]
+                        when {
+                            loc != null && rem == null -> {
                                 mergedMap[id] = loc.copy(isSynced = true)
                                 needCloudPush = true
-                            } else if (rem.updatedAtEpochMs > loc.updatedAtEpochMs) {
+                            }
+                            loc == null && rem != null -> {
                                 val syncedRem = rem.copy(isSynced = true)
                                 mergedMap[id] = syncedRem
-                                dao.upsert(syncedRem)
-                            } else {
-                                mergedMap[id] = loc.copy(isSynced = true)
-                                if (!loc.isSynced) {
-                                    dao.upsert(loc.copy(isSynced = true))
+                                toUpsertLocally.add(syncedRem)
+                            }
+                            loc != null && rem != null -> {
+                                if (loc.updatedAtEpochMs > rem.updatedAtEpochMs) {
+                                    mergedMap[id] = loc.copy(isSynced = true)
+                                    needCloudPush = true
+                                } else if (rem.updatedAtEpochMs > loc.updatedAtEpochMs) {
+                                    val syncedRem = rem.copy(isSynced = true)
+                                    mergedMap[id] = syncedRem
+                                    toUpsertLocally.add(syncedRem)
+                                } else {
+                                    val synced = loc.copy(isSynced = true)
+                                    mergedMap[id] = synced
+                                    if (!loc.isSynced) {
+                                        toUpsertLocally.add(synced)
+                                    }
                                 }
                             }
                         }
                     }
-                }
 
-                // 3. Если локально появились новые или обновлённые траты — сохраняем объединённый список в облако
-                if (needCloudPush) {
-                    val sortedMerged = mergedMap.values.sortedByDescending { it.createdAtEpochMs }
-                    val jsonArray = JSONArray()
-                    for (item in sortedMerged) {
-                        jsonArray.put(item.toJsonObject())
-                    }
-                    val rawBytes = jsonArray.toString().toByteArray(Charsets.UTF_8)
-                    val encodedB64 = Base64.encodeToString(rawBytes, Base64.NO_WRAP)
-
-                    val putBody = JSONObject().apply {
-                        put("message", "Sync family budget ($familyCode)")
-                        put("content", encodedB64)
-                        if (remoteSha != null) {
-                            put("sha", remoteSha)
-                        }
+                    if (toUpsertLocally.isNotEmpty()) {
+                        dao.upsertAll(toUpsertLocally)
                     }
 
-                    val putConn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
-                        requestMethod = "PUT"
-                        setRequestProperty("Authorization", "token $token")
-                        setRequestProperty("Accept", "application/vnd.github+json")
-                        setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-                        setRequestProperty("User-Agent", "FamilyBudgetZFold")
-                        connectTimeout = 10_000
-                        readTimeout = 10_000
-                        doOutput = true
-                    }
-
-                    OutputStreamWriter(putConn.outputStream, Charsets.UTF_8).use { writer ->
-                        writer.write(putBody.toString())
-                    }
-
-                    val putCode = putConn.responseCode
-                    if (putCode in 200..299) {
+                    // 3. Если локально появились новые или обновлённые траты — сохраняем объединённый список в облако
+                    if (needCloudPush) {
+                        val sortedMerged = mergedMap.values.sortedByDescending { it.createdAtEpochMs }
+                        val jsonArray = JSONArray()
                         for (item in sortedMerged) {
-                            dao.upsert(item.copy(isSynced = true))
+                            jsonArray.put(item.toJsonObject())
                         }
-                    } else {
-                        throw IllegalStateException("GitHub PUT HTTP $putCode")
-                    }
-                }
+                        val rawBytes = jsonArray.toString().toByteArray(Charsets.UTF_8)
+                        val encodedB64 = Base64.encodeToString(rawBytes, Base64.NO_WRAP)
 
-                _syncState.value = SyncState.CLOUD_CONNECTED
-            }.onFailure { err ->
-                Log.w("BudgetRepository", "Cloud sync offline: ${err.message}")
-                _syncState.value = SyncState.OFFLINE_READY
-            }
+                        val putBody = JSONObject().apply {
+                            put("message", "Sync family budget ($familyCode)")
+                            put("content", encodedB64)
+                            if (remoteSha != null) {
+                                put("sha", remoteSha)
+                            }
+                        }
+
+                        val putConn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
+                            requestMethod = "PUT"
+                            setRequestProperty("Authorization", "token $token")
+                            setRequestProperty("Accept", "application/vnd.github+json")
+                            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                            setRequestProperty("User-Agent", "FamilyBudgetZFold")
+                            connectTimeout = 15_000
+                            readTimeout = 30_000
+                            doOutput = true
+                        }
+
+                        OutputStreamWriter(putConn.outputStream, Charsets.UTF_8).use { writer ->
+                            writer.write(putBody.toString())
+                        }
+
+                        val putCode = putConn.responseCode
+                        if (putCode in 200..299) {
+                            val putRespText = putConn.inputStream.bufferedReader().readText()
+                            val newSha = JSONObject(putRespText).optJSONObject("content")?.optString("sha", "")
+                            cachedRemoteSha = newSha?.ifBlank { remoteSha } ?: remoteSha
+                            cachedEtag = null
+                            cachedRemoteMap = mergedMap.toMap()
+
+                            val newlySynced = localList.filter { !it.isSynced }.map { it.copy(isSynced = true) }
+                            if (newlySynced.isNotEmpty()) {
+                                dao.upsertAll(newlySynced)
+                            }
+                        } else {
+                            cachedEtag = null
+                            throw IllegalStateException("GitHub PUT HTTP $putCode")
+                        }
+                    }
+
+                    _syncState.value = SyncState.CLOUD_CONNECTED
+                }.onFailure { err ->
+                    Log.w("BudgetRepository", "Cloud sync offline: ${err.message}")
+                    _syncState.value = SyncState.OFFLINE_READY
+                }
             } finally {
                 _isSyncing.value = false
             }
         }
+    }
+
+    suspend fun importExpensesBatch(items: List<ExpenseEntity>): Int = withContext(Dispatchers.IO) {
+        if (items.isEmpty()) return@withContext 0
+        val existingIds = dao.getAllExpenses().map { it.id }.toSet()
+        val newItems = items.filter { it.id !in existingIds }.map { it.copy(isSynced = false) }
+        if (newItems.isNotEmpty()) {
+            dao.upsertAll(newItems)
+            scope.launch { syncWithCloudNow() }
+        }
+        newItems.size
     }
 
     suspend fun addOrUpdateExpense(expense: ExpenseEntity) {
@@ -258,7 +337,6 @@ class BudgetRepository private constructor(context: Context) {
     ) {
         val now = System.currentTimeMillis()
         val normalizedAmount = String.format("%.2f", amountRub)
-        // Сигнатура по сумме для защиты от двойного списания (Mir Pay + Сбер за одну покупку)
         val signature = "AMT_$normalizedAmount"
         val duplicate = dao.findRecentDuplicate(signature, now - 90_000L)
         if (duplicate != null && !duplicate.isDeleted) {
@@ -266,7 +344,7 @@ class BudgetRepository private constructor(context: Context) {
             return
         }
 
-        val guessedCategory = ExpenseCategory.guessFromMerchant(merchant)
+        val guessedCategory = ExpenseCategory.guessFromMerchant(merchant, isIncome = false)
         val expense = ExpenseEntity(
             amountRub = amountRub,
             merchant = merchant.ifBlank { "Покупка по карте" },

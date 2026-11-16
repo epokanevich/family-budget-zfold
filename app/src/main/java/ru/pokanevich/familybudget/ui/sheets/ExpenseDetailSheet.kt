@@ -57,6 +57,7 @@ fun ExpenseDetailSheet(
         "PUSH_SBER" -> "Автоперехват СберБанк"
         "PUSH_MIRPAY" -> "Автоперехват Mir Pay"
         "QR_RECEIPT" -> "QR-код чека ФНС"
+        "IMPORT_MM" -> "Перенесено из Money Manager"
         else -> "Добавлено вручную"
     }
 
@@ -93,10 +94,11 @@ fun ExpenseDetailSheet(
                     color = palette.textPrimary,
                     textAlign = TextAlign.Center
                 )
+                val formatted = Formatters.formatRub(expense.amountRub, showKopecksIfAny = true)
                 Text(
-                    text = Formatters.formatRub(expense.amountRub, showKopecksIfAny = true),
+                    text = if (expense.isIncome) "+$formatted" else formatted,
                     style = MaterialTheme.typography.headlineLarge,
-                    color = palette.textPrimary
+                    color = if (expense.isIncome) palette.accentEmerald else palette.textPrimary
                 )
             }
 

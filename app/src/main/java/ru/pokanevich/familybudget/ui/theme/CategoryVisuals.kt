@@ -10,13 +10,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AccountBalance
+import androidx.compose.material.icons.rounded.AccountBalanceWallet
+import androidx.compose.material.icons.rounded.CardGiftcard
+import androidx.compose.material.icons.rounded.ChildFriendly
+import androidx.compose.material.icons.rounded.DirectionsBus
+import androidx.compose.material.icons.rounded.HelpOutline
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.LocalCafe
-import androidx.compose.material.icons.rounded.LocalPharmacy
+import androidx.compose.material.icons.rounded.MonitorHeart
+import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.Pets
-import androidx.compose.material.icons.rounded.ReceiptLong
-import androidx.compose.material.icons.rounded.ShoppingBag
-import androidx.compose.material.icons.rounded.SportsEsports
+import androidx.compose.material.icons.rounded.Restaurant
+import androidx.compose.material.icons.rounded.Savings
+import androidx.compose.material.icons.rounded.ShoppingBasket
+import androidx.compose.material.icons.rounded.ShoppingCart
 import androidx.compose.material.icons.rounded.TwoWheeler
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -40,45 +48,98 @@ data class CategoryVisual(
 )
 
 fun ExpenseCategory.visual(): CategoryVisual = when (this) {
+    // 14 категорий РАСХОДОВ с цветами и иконками 1-в-1 как на скриншотах
     ExpenseCategory.GROCERIES -> CategoryVisual(
-        icon = Icons.Rounded.ShoppingBag,
-        color = Color(0xFF059669),
-        darkModeColor = Color(0xFF34D399)
-    )
-    ExpenseCategory.BABY_AND_PETS -> CategoryVisual(
-        icon = Icons.Rounded.Pets,
-        color = Color(0xFFDB2777),
-        darkModeColor = Color(0xFFF472B6)
-    )
-    ExpenseCategory.CAFES_AND_DELIVERY -> CategoryVisual(
-        icon = Icons.Rounded.LocalCafe,
-        color = Color(0xFFD97706),
-        darkModeColor = Color(0xFFFBBF24)
-    )
-    ExpenseCategory.HOME_AND_UTILITIES -> CategoryVisual(
-        icon = Icons.Rounded.Home,
-        color = Color(0xFF2563EB),
+        icon = Icons.Rounded.ShoppingBasket,
+        color = Color(0xFF3A7DF0),
         darkModeColor = Color(0xFF60A5FA)
     )
-    ExpenseCategory.TRANSPORT_AND_MOTO -> CategoryVisual(
+    ExpenseCategory.CAFES -> CategoryVisual(
+        icon = Icons.Rounded.LocalCafe,
+        color = Color(0xFF9368CE),
+        darkModeColor = Color(0xFFB794F4)
+    )
+    ExpenseCategory.LEISURE -> CategoryVisual(
+        icon = Icons.Rounded.AccountBalanceWallet,
+        color = Color(0xFF2FA393),
+        darkModeColor = Color(0xFF4FD1C5)
+    )
+    ExpenseCategory.TRANSPORT -> CategoryVisual(
+        icon = Icons.Rounded.DirectionsBus,
+        color = Color(0xFF2C62DF),
+        darkModeColor = Color(0xFF638EFF)
+    )
+    ExpenseCategory.WORK_FOOD -> CategoryVisual(
+        icon = Icons.Rounded.Restaurant,
+        color = Color(0xFF569E39),
+        darkModeColor = Color(0xFF7AD659)
+    )
+    ExpenseCategory.HEALTH -> CategoryVisual(
+        icon = Icons.Rounded.MonitorHeart,
+        color = Color(0xFF39B530),
+        darkModeColor = Color(0xFF85F473)
+    )
+    ExpenseCategory.SHOPPING -> CategoryVisual(
+        icon = Icons.Rounded.ShoppingCart,
+        color = Color(0xFFB85605),
+        darkModeColor = Color(0xFFED8936)
+    )
+    ExpenseCategory.GIFTS -> CategoryVisual(
+        icon = Icons.Rounded.CardGiftcard,
+        color = Color(0xFFE53935),
+        darkModeColor = Color(0xFFF87171)
+    )
+    ExpenseCategory.UTILITIES -> CategoryVisual(
+        icon = Icons.Rounded.Home,
+        color = Color(0xFF1E4F99),
+        darkModeColor = Color(0xFF5A94EA)
+    )
+    ExpenseCategory.CREDIT -> CategoryVisual(
+        icon = Icons.Rounded.Payments,
+        color = Color(0xFF1A9AB8),
+        darkModeColor = Color(0xFF38BDF8)
+    )
+    ExpenseCategory.PETS -> CategoryVisual(
+        icon = Icons.Rounded.Pets,
+        color = Color(0xFFD61980),
+        darkModeColor = Color(0xFFF472B6)
+    )
+    ExpenseCategory.MOTO -> CategoryVisual(
         icon = Icons.Rounded.TwoWheeler,
-        color = Color(0xFF4F46E5),
-        darkModeColor = Color(0xFF818CF8)
+        color = Color(0xFF9EA800),
+        darkModeColor = Color(0xFFD4E100)
     )
-    ExpenseCategory.HEALTH_AND_PHARMACY -> CategoryVisual(
-        icon = Icons.Rounded.LocalPharmacy,
-        color = Color(0xFF0D9488),
-        darkModeColor = Color(0xFF2DD4BF)
-    )
-    ExpenseCategory.LEISURE_AND_HOBBIES -> CategoryVisual(
-        icon = Icons.Rounded.SportsEsports,
-        color = Color(0xFF7C3AED),
-        darkModeColor = Color(0xFFA78BFA)
+    ExpenseCategory.BABY -> CategoryVisual(
+        icon = Icons.Rounded.ChildFriendly,
+        color = Color(0xFF1EB5A6),
+        darkModeColor = Color(0xFF75E4D6)
     )
     ExpenseCategory.OTHER -> CategoryVisual(
-        icon = Icons.Rounded.ReceiptLong,
-        color = Color(0xFF475569),
+        icon = Icons.Rounded.HelpOutline,
+        color = Color(0xFF64748B),
         darkModeColor = Color(0xFF94A3B8)
+    )
+
+    // 4 категории ДОХОДОВ
+    ExpenseCategory.INCOME_SALARY -> CategoryVisual(
+        icon = Icons.Rounded.Payments,
+        color = Color(0xFF2C62DF),
+        darkModeColor = Color(0xFF60A5FA)
+    )
+    ExpenseCategory.INCOME_GIFT -> CategoryVisual(
+        icon = Icons.Rounded.CardGiftcard,
+        color = Color(0xFFD62877),
+        darkModeColor = Color(0xFFF472B6)
+    )
+    ExpenseCategory.INCOME_INTEREST -> CategoryVisual(
+        icon = Icons.Rounded.AccountBalance,
+        color = Color(0xFF569E39),
+        darkModeColor = Color(0xFF7AD659)
+    )
+    ExpenseCategory.INCOME_OTHER -> CategoryVisual(
+        icon = Icons.Rounded.Savings,
+        color = Color(0xFF059669),
+        darkModeColor = Color(0xFF34D399)
     )
 }
 
@@ -88,12 +149,12 @@ fun CategoryIconBadge(
     modifier: Modifier = Modifier,
     size: Dp = 42.dp,
     iconSize: Dp = 21.dp,
-    cornerRadius: Dp = 13.dp
+    cornerRadius: Dp = 14.dp
 ) {
     val palette = LocalFamilyPalette.current
     val vis = category.visual()
     val tint = if (palette.isDark) vis.darkModeColor else vis.color
-    val bgAlpha = if (palette.isDark) 0.18f else 0.12f
+    val bgAlpha = if (palette.isDark) 0.18f else 0.13f
 
     Box(
         modifier = modifier

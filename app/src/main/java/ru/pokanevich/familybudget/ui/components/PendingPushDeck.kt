@@ -185,7 +185,7 @@ fun PendingPushCard(
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                items(ExpenseCategory.entries) { cat ->
+                items(ExpenseCategory.expenseCategories) { cat ->
                     val vis = cat.visual()
                     val tint = if (palette.isDark) vis.darkModeColor else vis.color
                     val selected = selectedCategory == cat

@@ -28,7 +28,10 @@ data class ExpenseEntity(
     val dedupSignature: String = ""     // Защита от дублей одного и того же пуша Сбера и Mir Pay
 ) {
     val category: ExpenseCategory
-        get() = runCatching { ExpenseCategory.valueOf(categoryName) }.getOrDefault(ExpenseCategory.OTHER)
+        get() = ExpenseCategory.fromStoredName(categoryName)
+
+    val isIncome: Boolean
+        get() = category.isIncome
 
     fun toJsonObject(): JSONObject = JSONObject().apply {
         put("id", id)

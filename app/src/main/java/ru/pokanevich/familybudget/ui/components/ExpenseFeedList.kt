@@ -60,6 +60,8 @@ import java.util.Calendar
 
 enum class FeedFilter(val label: String) {
     ALL("Все"),
+    EXPENSES("Расходы"),
+    INCOMES("Доходы"),
     EUGENE("Евгений"),
     ANZHELIKA("Анжелика")
 }
@@ -162,29 +164,32 @@ fun ExpensesFeedPane(
 ) {
     val palette = LocalFamilyPalette.current
     var searchQuery by remember { mutableStateOf("") }
-    var authorFilter by remember { mutableStateOf(FeedFilter.ALL) }
+    var activeFilter by remember { mutableStateOf(FeedFilter.ALL) }
     var selectedCategoryFilter by remember { mutableStateOf<ExpenseCategory?>(null) }
 
     val monthExpenses = remember(confirmedExpenses, selectedYear, selectedMonthZeroBased) {
+        val cal = Calendar.getInstance()
         confirmedExpenses.filter { exp ->
-            val cal = Calendar.getInstance().apply { timeInMillis = exp.createdAtEpochMs }
+            cal.timeInMillis = exp.createdAtEpochMs
             cal.get(Calendar.YEAR) == selectedYear && cal.get(Calendar.MONTH) == selectedMonthZeroBased
         }
     }
 
-    val filteredExpenses = remember(monthExpenses, searchQuery, authorFilter, selectedCategoryFilter) {
+    val filteredExpenses = remember(monthExpenses, searchQuery, activeFilter, selectedCategoryFilter) {
         val q = searchQuery.trim().lowercase()
         monthExpenses.filter { exp ->
             val matchesQuery = q.isEmpty() ||
                 exp.merchant.lowercase().contains(q) ||
                 exp.category.displayName.lowercase().contains(q)
-            val matchesAuthor = when (authorFilter) {
+            val matchesFilter = when (activeFilter) {
                 FeedFilter.ALL -> true
+                FeedFilter.EXPENSES -> !exp.isIncome
+                FeedFilter.INCOMES -> exp.isIncome
                 FeedFilter.EUGENE -> exp.authorName.equals("Евгений", ignoreCase = true)
                 FeedFilter.ANZHELIKA -> exp.authorName.equals("Анжелика", ignoreCase = true)
             }
             val matchesCategory = selectedCategoryFilter == null || exp.category == selectedCategoryFilter
-            matchesQuery && matchesAuthor && matchesCategory
+            matchesQuery && matchesFilter && matchesCategory
         }
     }
 
@@ -194,10 +199,13 @@ fun ExpensesFeedPane(
             .entries
             .sortedByDescending { it.key }
             .map { entry ->
+                val dayExpenseSum = entry.value.filter { !it.isIncome }.sumOf { it.amountRub }
+                val dayIncomeSum = entry.value.filter { it.isIncome }.sumOf { it.amountRub }
                 DayExpenseGroup(
                     dayKey = entry.key,
                     headerTitle = Formatters.formatDayHeader(entry.value.first().createdAtEpochMs),
-                    dayTotal = entry.value.sumOf { it.amountRub },
+                    dayExpenseTotal = dayExpenseSum,
+                    dayIncomeTotal = dayIncomeSum,
                     items = entry.value.sortedByDescending { it.createdAtEpochMs }
                 )
             }
@@ -288,17 +296,19 @@ fun ExpensesFeedPane(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         items(FeedFilter.entries) { filter ->
-                            val selected = authorFilter == filter && selectedCategoryFilter == null
+                            val selected = activeFilter == filter && selectedCategoryFilter == null
                             FilterPillChip(
                                 label = filter.label,
                                 selected = selected,
                                 accentColor = when (filter) {
                                     FeedFilter.EUGENE -> palette.eugeneColor
                                     FeedFilter.ANZHELIKA -> palette.anzhelikaColor
+                                    FeedFilter.INCOMES -> palette.accentEmerald
+                                    FeedFilter.EXPENSES -> palette.accentCoral
                                     FeedFilter.ALL -> palette.accentEmerald
                                 },
                                 onClick = {
-                                    authorFilter = filter
+                                    activeFilter = filter
                                     if (filter == FeedFilter.ALL) {
                                         selectedCategoryFilter = null
                                     }
@@ -328,7 +338,7 @@ fun ExpensesFeedPane(
                     hasMonthExpenses = monthExpenses.isNotEmpty(),
                     onResetFilters = {
                         searchQuery = ""
-                        authorFilter = FeedFilter.ALL
+                        activeFilter = FeedFilter.ALL
                         selectedCategoryFilter = null
                     },
                     onAddClick = onAddClick
@@ -349,12 +359,27 @@ fun ExpensesFeedPane(
                             style = MaterialTheme.typography.titleSmall,
                             color = palette.textSecondary
                         )
-                        Text(
-                            text = Formatters.formatRub(group.dayTotal),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = palette.textMuted,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (group.dayIncomeTotal > 0.0) {
+                                Text(
+                                    text = "+${Formatters.formatRub(group.dayIncomeTotal)}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = palette.accentEmerald,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                            if (group.dayExpenseTotal > 0.0) {
+                                Text(
+                                    text = Formatters.formatRub(group.dayExpenseTotal),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = palette.textMuted,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -390,7 +415,8 @@ fun ExpensesFeedPane(
 private data class DayExpenseGroup(
     val dayKey: Long,
     val headerTitle: String,
-    val dayTotal: Double,
+    val dayExpenseTotal: Double,
+    val dayIncomeTotal: Double,
     val items: List<ExpenseEntity>
 )
 
@@ -402,11 +428,13 @@ private fun ExpenseTransactionRow(
     val palette = LocalFamilyPalette.current
     val isAnzhelika = expense.authorName.equals("Анжелика", ignoreCase = true)
     val authorColor = if (isAnzhelika) palette.anzhelikaColor else palette.eugeneColor
+    val isIncome = expense.isIncome
 
     val sourceTag = when (expense.sourceType) {
         "PUSH_SBER" -> "Сбер"
         "PUSH_MIRPAY" -> "Mir Pay"
         "QR_RECEIPT" -> "Чек ФНС"
+        "IMPORT_MM" -> null
         else -> null
     }
 
@@ -460,7 +488,7 @@ private fun ExpenseTransactionRow(
                     color = palette.textMuted
                 )
                 Text(
-                    text = expense.category.shortName,
+                    text = expense.category.displayName,
                     style = MaterialTheme.typography.labelSmall,
                     color = palette.textSecondary,
                     maxLines = 1,
@@ -485,11 +513,12 @@ private fun ExpenseTransactionRow(
         }
 
         Column(horizontalAlignment = Alignment.End) {
+            val formatted = Formatters.formatRub(expense.amountRub, showKopecksIfAny = true)
             Text(
-                text = Formatters.formatRub(expense.amountRub, showKopecksIfAny = true),
+                text = if (isIncome) "+$formatted" else formatted,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = palette.textPrimary
+                color = if (isIncome) palette.accentEmerald else palette.textPrimary
             )
             Text(
                 text = Formatters.formatTimeOnly(expense.createdAtEpochMs),
@@ -633,7 +662,7 @@ private fun EmptyFeedCard(
                 text = if (hasMonthExpenses) {
                     "Попробуйте изменить поисковый запрос или сбросить фильтр."
                 } else {
-                    "Добавьте первую покупку вручную, отсканируйте QR-код чека ФНС или дождитесь пуша от Сбера."
+                    "Добавьте операцию вручную, отсканируйте QR-код чека ФНС или переключите месяц выше."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = palette.textSecondary,
@@ -659,7 +688,7 @@ private fun EmptyFeedCard(
                     Spacer(modifier = Modifier.width(6.dp))
                 }
                 Text(
-                    text = if (hasMonthExpenses) "Сбросить фильтры" else "Добавить трату",
+                    text = if (hasMonthExpenses) "Сбросить фильтры" else "Добавить операцию",
                     fontWeight = FontWeight.SemiBold
                 )
             }

@@ -1,5 +1,8 @@
 package ru.pokanevich.familybudget.ui.sheets
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,12 +20,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -68,8 +73,11 @@ fun FamilySettingsSheet(
     themeMode: AppThemeMode,
     syncState: SyncState,
     isPushAccessGranted: Boolean,
+    isImportingBackup: Boolean,
+    importStatusMessage: String?,
     onOpenPushSettings: () -> Unit,
     onSimulateTestPush: () -> Unit,
+    onImportBackupUri: (Uri) -> Unit,
     onSyncNow: () -> Unit,
     onThemePreview: (AppThemeMode) -> Unit,
     onDismiss: () -> Unit,
@@ -77,6 +85,13 @@ fun FamilySettingsSheet(
 ) {
     val palette = LocalFamilyPalette.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val backupPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            onImportBackupUri(uri)
+        }
+    }
 
     var name by remember { mutableStateOf(currentUserName) }
     var code by remember { mutableStateOf(familySpaceCode) }
@@ -333,6 +348,51 @@ fun FamilySettingsSheet(
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
+            }
+
+            // Section 5: Import from Money Manager (.mmbackup)
+            SettingsGroupCard(title = "Перенос данных") {
+                OutlinedButton(
+                    enabled = !isImportingBackup,
+                    onClick = { backupPickerLauncher.launch(arrayOf("*/*")) },
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, palette.accentBlue),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (isImportingBackup) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = palette.accentBlue
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Импорт архива...",
+                            color = palette.accentBlue,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Rounded.FileUpload,
+                            contentDescription = null,
+                            tint = palette.accentBlue,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Импорт архива Money Manager (.mmbackup)",
+                            color = palette.accentBlue,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+                if (importStatusMessage != null) {
+                    Text(
+                        text = importStatusMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.accentEmerald
+                    )
+                }
             }
 
             Button(

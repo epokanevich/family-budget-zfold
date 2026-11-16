@@ -1,7 +1,6 @@
 package ru.pokanevich.familybudget.ui.sheets
 
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -61,8 +60,12 @@ import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
 import ru.pokanevich.familybudget.ui.theme.visual
 import kotlin.math.roundToInt
 
-private val quickMerchants = listOf(
-    "Пятёрочка", "ВкусВилл", "Кофе", "Аптека", "АЗС", "Ozon", "Детский мир"
+private val quickExpenseMerchants = listOf(
+    "Пятёрочка", "ВкусВилл", "Кофе", "Обед", "Аптека", "АЗС", "Ozon"
+)
+
+private val quickIncomeNotes = listOf(
+    "Зарплата", "Аванс", "Проценты", "Подарок", "Кэшбэк"
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -87,13 +90,21 @@ fun AddEditExpenseSheet(
         else -> initialAmount
     }
     val startMerchant = editingExpense?.merchant ?: initialMerchant
-    val startCategory = editingExpense?.category ?: ExpenseCategory.guessFromMerchant(startMerchant)
+    val startIsIncome = editingExpense?.isIncome ?: false
+    val startCategory = editingExpense?.category ?: ExpenseCategory.guessFromMerchant(startMerchant, startIsIncome)
     val startAuthor = editingExpense?.authorName ?: defaultAuthorName
 
+    var isIncomeMode by remember(editingExpense) { mutableStateOf(startIsIncome) }
     var amountText by remember(editingExpense, initialAmount) { mutableStateOf(startAmount) }
     var merchantText by remember(editingExpense, initialMerchant) { mutableStateOf(startMerchant) }
     var selectedCategory by remember(editingExpense, initialMerchant) { mutableStateOf(startCategory) }
     var selectedAuthor by remember(editingExpense, defaultAuthorName) { mutableStateOf(startAuthor) }
+
+    val activeCategories = if (isIncomeMode) {
+        ExpenseCategory.incomeCategories
+    } else {
+        ExpenseCategory.expenseCategories
+    }
 
     val parsedAmount = amountText.replace(",", ".").replace(" ", "").toDoubleOrNull() ?: 0.0
     val isValid = parsedAmount > 0.0
@@ -112,20 +123,20 @@ fun AddEditExpenseSheet(
                 .padding(horizontal = 20.dp)
                 .navigationBarsPadding()
                 .padding(bottom = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // Header
+            // Header + QR Scanner
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = if (editingExpense == null) "Новая трата" else "Редактировать трату",
+                    text = if (editingExpense == null) "Новая операция" else "Редактировать запись",
                     style = MaterialTheme.typography.titleLarge,
                     color = palette.textPrimary
                 )
-                if (editingExpense == null) {
+                if (editingExpense == null && !isIncomeMode) {
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = palette.accentBlueSoft,
@@ -155,7 +166,53 @@ fun AddEditExpenseSheet(
                 }
             }
 
-            // Giant Centered Amount Input (Splitwise / Splittr / Tricount style)
+            // РАСХОДЫ / ДОХОДЫ Switcher
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                color = palette.surfaceElevated
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    listOf(false to "Расход", true to "Доход").forEach { (inc, label) ->
+                        val active = isIncomeMode == inc
+                        val accent = if (inc) palette.accentEmerald else palette.accentCoral
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(11.dp))
+                                .clickable {
+                                    isIncomeMode = inc
+                                    selectedCategory = if (inc) {
+                                        ExpenseCategory.INCOME_SALARY
+                                    } else {
+                                        ExpenseCategory.GROCERIES
+                                    }
+                                },
+                            shape = RoundedCornerShape(11.dp),
+                            color = if (active) palette.surfaceCard else Color.Transparent,
+                            shadowElevation = if (active && !palette.isDark) 1.dp else 0.dp
+                        ) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                color = if (active) accent else palette.textSecondary,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 9.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Giant Centered Amount Input
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(20.dp),
@@ -168,7 +225,7 @@ fun AddEditExpenseSheet(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 16.dp, horizontal = 14.dp),
+                        .padding(vertical = 14.dp, horizontal = 14.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
@@ -199,7 +256,7 @@ fun AddEditExpenseSheet(
                                 textStyle = TextStyle(
                                     fontSize = 36.sp,
                                     fontWeight = FontWeight.ExtraBold,
-                                    color = palette.textPrimary,
+                                    color = if (isIncomeMode) palette.accentEmerald else palette.textPrimary,
                                     textAlign = TextAlign.Center
                                 ),
                                 modifier = Modifier.width(190.dp)
@@ -214,9 +271,8 @@ fun AddEditExpenseSheet(
                         )
                     }
 
-                    // Quick +100 / +500 / +1000 chips
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(100, 500, 1000).forEach { addVal ->
+                        listOf(100, 500, 1000, 5000).forEach { addVal ->
                             Surface(
                                 shape = RoundedCornerShape(999.dp),
                                 color = palette.surfaceCard,
@@ -233,11 +289,11 @@ fun AddEditExpenseSheet(
                                     }
                             ) {
                                 Text(
-                                    text = "+$addVal ₽",
+                                    text = "+$addVal",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = palette.textSecondary,
                                     fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                                 )
                             }
                         }
@@ -245,10 +301,10 @@ fun AddEditExpenseSheet(
                 }
             }
 
-            // Payer Toggle (Splitwise / Tricount style)
+            // Payer / Author Toggle
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    text = "Кто оплатил",
+                    text = if (isIncomeMode) "Чей доход" else "Кто оплатил",
                     style = MaterialTheme.typography.labelMedium,
                     color = palette.textSecondary
                 )
@@ -292,21 +348,21 @@ fun AddEditExpenseSheet(
                 }
             }
 
-            // Merchant Field + Quick Chips
+            // Merchant / Note Field + Quick Chips
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = merchantText,
                     onValueChange = {
                         merchantText = it
                         if (editingExpense == null) {
-                            val guessed = ExpenseCategory.guessFromMerchant(it)
-                            if (guessed != ExpenseCategory.OTHER) {
+                            val guessed = ExpenseCategory.guessFromMerchant(it, isIncomeMode)
+                            if (guessed != ExpenseCategory.OTHER && guessed != ExpenseCategory.INCOME_OTHER) {
                                 selectedCategory = guessed
                             }
                         }
                     },
-                    label = { Text("Магазин или описание") },
-                    placeholder = { Text("Например, Пятёрочка") },
+                    label = { Text(if (isIncomeMode) "Источник или комментарий" else "Магазин или комментарий") },
+                    placeholder = { Text(if (isIncomeMode) "Например, Аванс" else "Например, Пятёрочка") },
                     singleLine = true,
                     shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -314,7 +370,7 @@ fun AddEditExpenseSheet(
                         unfocusedBorderColor = palette.outlineSubtle
                     ),
                     trailingIcon = {
-                        if (editingExpense == null) {
+                        if (editingExpense == null && !isIncomeMode) {
                             IconButton(onClick = onOpenQrScanner) {
                                 Icon(
                                     imageVector = Icons.Rounded.QrCodeScanner,
@@ -328,8 +384,9 @@ fun AddEditExpenseSheet(
                 )
 
                 if (editingExpense == null && merchantText.isBlank()) {
+                    val suggestions = if (isIncomeMode) quickIncomeNotes else quickExpenseMerchants
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(quickMerchants) { sample ->
+                        items(suggestions) { sample ->
                             Surface(
                                 shape = RoundedCornerShape(10.dp),
                                 color = palette.surfaceElevated,
@@ -337,8 +394,8 @@ fun AddEditExpenseSheet(
                                     .clip(RoundedCornerShape(10.dp))
                                     .clickable {
                                         merchantText = sample
-                                        val guessed = ExpenseCategory.guessFromMerchant(sample)
-                                        if (guessed != ExpenseCategory.OTHER) {
+                                        val guessed = ExpenseCategory.guessFromMerchant(sample, isIncomeMode)
+                                        if (guessed != ExpenseCategory.OTHER && guessed != ExpenseCategory.INCOME_OTHER) {
                                             selectedCategory = guessed
                                         }
                                     }
@@ -355,14 +412,14 @@ fun AddEditExpenseSheet(
                 }
             }
 
-            // 4x2 Visual Category Grid
+            // 4-column Visual Category Grid
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
                     text = "Категория",
                     style = MaterialTheme.typography.labelMedium,
                     color = palette.textSecondary
                 )
-                ExpenseCategory.entries.chunked(4).forEach { rowCats ->
+                activeCategories.chunked(4).forEach { rowCats ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -382,15 +439,15 @@ fun AddEditExpenseSheet(
                                 border = if (selected) BorderStroke(1.5.dp, tint) else null
                             ) {
                                 Column(
-                                    modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp),
+                                    modifier = Modifier.padding(vertical = 9.dp, horizontal = 4.dp),
                                     horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    verticalArrangement = Arrangement.spacedBy(5.dp)
                                 ) {
                                     CategoryIconBadge(
                                         category = cat,
                                         size = 34.dp,
                                         iconSize = 18.dp,
-                                        cornerRadius = 10.dp
+                                        cornerRadius = 11.dp
                                     )
                                     Text(
                                         text = cat.shortName,
@@ -404,17 +461,19 @@ fun AddEditExpenseSheet(
                                 }
                             }
                         }
+                        repeat(4 - rowCats.size) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
                     }
                 }
             }
 
-            // Primary Submit Button
             Button(
                 enabled = isValid,
                 onClick = {
                     onSave(
                         parsedAmount,
-                        merchantText.trim().ifBlank { selectedCategory.shortName },
+                        merchantText.trim().ifBlank { selectedCategory.displayName },
                         selectedCategory,
                         selectedAuthor
                     )
@@ -432,7 +491,11 @@ fun AddEditExpenseSheet(
                     .height(52.dp)
             ) {
                 Text(
-                    text = if (editingExpense == null) "Добавить в бюджет" else "Сохранить изменения",
+                    text = when {
+                        editingExpense != null -> "Сохранить изменения"
+                        isIncomeMode -> "Добавить доход"
+                        else -> "Добавить в бюджет"
+                    },
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold
                 )
