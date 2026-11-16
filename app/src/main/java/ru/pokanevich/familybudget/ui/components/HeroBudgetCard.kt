@@ -1,0 +1,324 @@
+package ru.pokanevich.familybudget.ui.components
+
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import ru.pokanevich.familybudget.ai.AiBudgetReport
+import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
+import ru.pokanevich.familybudget.ui.util.Formatters
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+@Composable
+fun HeroBudgetCard(
+    report: AiBudgetReport,
+    monthZeroBased: Int,
+    year: Int,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalFamilyPalette.current
+    val budget = report.monthlyBudgetRub.coerceAtLeast(1.0)
+    val rawRatio = (report.totalSpentThisMonthRub / budget).toFloat().coerceIn(0f, 1f)
+    val animatedFill by animateFloatAsState(
+        targetValue = rawRatio,
+        animationSpec = tween(durationMillis = 600),
+        label = "budgetFill"
+    )
+
+    val paceDelta = report.expectedSpentByTodayRub - report.totalSpentThisMonthRub
+    val isOverBudget = report.totalSpentThisMonthRub > report.monthlyBudgetRub
+    val isOverPace = report.isCurrentMonth && report.totalSpentThisMonthRub > report.expectedSpentByTodayRub * 1.12
+
+    val barColor = when {
+        isOverBudget -> Color(0xFFFB7185)
+        isOverPace -> Color(0xFFFBBF24)
+        else -> Color(0xFF34D399)
+    }
+
+    val statusText = when {
+        isOverBudget -> "Перерасход +${Formatters.formatRub(report.totalSpentThisMonthRub - report.monthlyBudgetRub)}"
+        !report.isCurrentMonth -> "${report.totalTransactions} операций"
+        paceDelta >= budget * 0.03 -> "Запас +${Formatters.formatRub(paceDelta)}"
+        paceDelta <= -budget * 0.03 -> "Темп +${Formatters.formatRub(abs(paceDelta))}"
+        else -> "Ровно по плану"
+    }
+
+    val statusBg = when {
+        isOverBudget -> Color(0xFFFB7185).copy(alpha = 0.24f)
+        isOverPace -> Color(0xFFFBBF24).copy(alpha = 0.22f)
+        else -> Color.White.copy(alpha = 0.16f)
+    }
+
+    val eugene = report.eugeneSpentRub
+    val anzhelika = report.anzhelikaSpentRub
+    val coupleTotal = (eugene + anzhelika).coerceAtLeast(1.0)
+    val eugeneRatio = if (eugene + anzhelika > 0.0) (eugene / coupleTotal).toFloat().coerceIn(0f, 1f) else 0.5f
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        color = Color.Transparent,
+        shadowElevation = if (palette.isDark) 0.dp else 4.dp
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    brush = Brush.linearGradient(
+                        colors = listOf(palette.heroStart, palette.heroEnd)
+                    )
+                )
+        ) {
+            // Subtle fintech geometric background rings
+            Canvas(modifier = Modifier.matchParentSize()) {
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.05f),
+                    radius = size.minDimension * 0.62f,
+                    center = Offset(size.width * 0.92f, size.height * 0.12f)
+                )
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.04f),
+                    radius = size.minDimension * 0.42f,
+                    center = Offset(size.width * 0.78f, size.height * 0.95f)
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Header Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (report.isCurrentMonth) {
+                            "Общий котёл • в ${Formatters.formatMonthPrepositional(monthZeroBased)}"
+                        } else {
+                            "Общий котёл • ${Formatters.formatMonthTitle(year, monthZeroBased)}"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color.White.copy(alpha = 0.82f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(statusBg)
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = statusText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                // Big Amount Row
+                Row(
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = Formatters.formatRub(report.totalSpentThisMonthRub),
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = Color.White
+                    )
+                    Text(
+                        text = "из ${Formatters.formatRub(report.monthlyBudgetRub)}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.72f),
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                }
+
+                // Progress bar with today's calendar pace tick
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(14.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(Color.White.copy(alpha = 0.18f))
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .fillMaxWidth(animatedFill)
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(barColor)
+                        )
+                    }
+                    if (report.isCurrentMonth && report.monthProgressRatio in 0.03f..0.97f) {
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val markerX = size.width * report.monthProgressRatio
+                            drawLine(
+                                color = Color.White.copy(alpha = 0.92f),
+                                start = Offset(markerX, 0f),
+                                end = Offset(markerX, size.height),
+                                strokeWidth = 2.dp.toPx()
+                            )
+                        }
+                    }
+                }
+
+                // Bottom frosted metric strip
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color.White.copy(alpha = 0.10f))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val remaining = report.monthlyBudgetRub - report.totalSpentThisMonthRub
+                    HeroMiniMetric(
+                        label = if (remaining >= 0) "Остаток" else "Перерасход",
+                        value = Formatters.formatRub(abs(remaining)),
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    HeroMiniMetric(
+                        label = if (report.isCurrentMonth) "Ритм/день" else "Операций",
+                        value = if (report.isCurrentMonth) {
+                            "${Formatters.formatRub(report.safeDailySpendRemainingRub)}"
+                        } else {
+                            "${report.totalTransactions}"
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+
+                    Column(
+                        modifier = Modifier.weight(1.15f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(palette.eugeneColor)
+                            )
+                            Text(
+                                text = "Е ${(eugeneRatio * 100).roundToInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.9f)
+                            )
+                            Spacer(modifier = Modifier.width(2.dp))
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(palette.anzhelikaColor)
+                            )
+                            Text(
+                                text = "А ${100 - (eugeneRatio * 100).roundToInt()}%",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = 0.9f)
+                            )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(5.dp)
+                                .clip(RoundedCornerShape(999.dp))
+                                .background(Color.White.copy(alpha = 0.16f))
+                        ) {
+                            if (eugene + anzhelika > 0.0) {
+                                if (eugeneRatio > 0f) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .weight(eugeneRatio.coerceAtLeast(0.01f))
+                                            .background(palette.eugeneColor)
+                                    )
+                                }
+                                val aRatio = (1f - eugeneRatio).coerceAtLeast(0f)
+                                if (aRatio > 0f) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .weight(aRatio.coerceAtLeast(0.01f))
+                                            .background(palette.anzhelikaColor)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeroMiniMetric(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White.copy(alpha = 0.70f),
+            maxLines = 1
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleSmall,
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}

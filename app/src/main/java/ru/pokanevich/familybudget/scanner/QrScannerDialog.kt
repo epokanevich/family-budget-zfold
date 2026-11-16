@@ -10,14 +10,42 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -26,6 +54,7 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
 import java.util.concurrent.Executors
 
 @Composable
@@ -33,6 +62,7 @@ fun QrScannerDialog(
     onDismiss: () -> Unit,
     onReceiptDetected: (FnsReceiptQrData) -> Unit
 ) {
+    val palette = LocalFamilyPalette.current
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var hasCameraPermission by remember {
@@ -43,6 +73,13 @@ fun QrScannerDialog(
     }
     var manualQrInput by remember { mutableStateOf("") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    val executor = remember { Executors.newSingleThreadExecutor() }
+    DisposableEffect(Unit) {
+        onDispose {
+            executor.shutdown()
+        }
+    }
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -59,30 +96,34 @@ fun QrScannerDialog(
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(24.dp),
+            color = palette.surfaceCard,
+            contentColor = palette.textPrimary,
             tonalElevation = 6.dp,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(8.dp)
+                .padding(4.dp)
         ) {
             Column(
                 modifier = Modifier.padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    text = "Сканер QR-кода чека ФНС",
-                    style = MaterialTheme.typography.titleLarge
+                    text = "Сканер чека ФНС",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = palette.textPrimary
                 )
                 Text(
-                    text = "Наведите камеру на QR-код любого кассового чека РФ — сумма и дата подставятся автоматически.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = "Наведите камеру на QR-код кассового чека — сумма подставится автоматически.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.textSecondary
                 )
 
                 if (hasCameraPermission) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(260.dp),
+                            .height(250.dp)
+                            .clip(RoundedCornerShape(18.dp)),
                         contentAlignment = Alignment.Center
                     ) {
                         AndroidView(
@@ -90,7 +131,6 @@ fun QrScannerDialog(
                             factory = { ctx ->
                                 val previewView = PreviewView(ctx)
                                 val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-                                val executor = Executors.newSingleThreadExecutor()
 
                                 cameraProviderFuture.addListener({
                                     val cameraProvider = cameraProviderFuture.get()
@@ -103,6 +143,7 @@ fun QrScannerDialog(
                                         .build()
                                     val scanner = BarcodeScanning.getClient(options)
 
+                                    @Suppress("DEPRECATION")
                                     val analysis = ImageAnalysis.Builder()
                                         .setTargetResolution(Size(1280, 720))
                                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -149,11 +190,37 @@ fun QrScannerDialog(
                                 previewView
                             }
                         )
+
+                        // Corner scanning frame overlay
+                        Canvas(modifier = Modifier.fillMaxSize()) {
+                            val pad = size.minDimension * 0.18f
+                            val arm = size.minDimension * 0.14f
+                            val stroke = 3.5.dp.toPx()
+                            val frameColor = Color(0xFF34D399)
+
+                            val left = (size.width - (size.minDimension - pad * 2)) / 2f
+                            val top = pad
+                            val right = size.width - left
+                            val bottom = size.height - pad
+
+                            // Top-Left
+                            drawLine(frameColor, Offset(left, top), Offset(left + arm, top), stroke, StrokeCap.Round)
+                            drawLine(frameColor, Offset(left, top), Offset(left, top + arm), stroke, StrokeCap.Round)
+                            // Top-Right
+                            drawLine(frameColor, Offset(right - arm, top), Offset(right, top), stroke, StrokeCap.Round)
+                            drawLine(frameColor, Offset(right, top), Offset(right, top + arm), stroke, StrokeCap.Round)
+                            // Bottom-Left
+                            drawLine(frameColor, Offset(left, bottom), Offset(left + arm, bottom), stroke, StrokeCap.Round)
+                            drawLine(frameColor, Offset(left, bottom - arm), Offset(left, bottom), stroke, StrokeCap.Round)
+                            // Bottom-Right
+                            drawLine(frameColor, Offset(right - arm, bottom), Offset(right, bottom), stroke, StrokeCap.Round)
+                            drawLine(frameColor, Offset(right, bottom - arm), Offset(right, bottom), stroke, StrokeCap.Round)
+                        }
                     }
                 } else {
                     Text(
                         text = "Нет доступа к камере. Разрешите доступ или вставьте строку QR ниже:",
-                        color = MaterialTheme.colorScheme.error,
+                        color = palette.accentCoral,
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -163,13 +230,18 @@ fun QrScannerDialog(
                     onValueChange = { manualQrInput = it },
                     label = { Text("Или вставьте текст QR (t=...&s=1450.00)") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = palette.accentEmerald,
+                        unfocusedBorderColor = palette.outlineSubtle
+                    ),
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 if (errorMsg != null) {
                     Text(
                         text = errorMsg!!,
-                        color = MaterialTheme.colorScheme.error,
+                        color = palette.accentCoral,
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -179,19 +251,26 @@ fun QrScannerDialog(
                     horizontalArrangement = Arrangement.End
                 ) {
                     TextButton(onClick = onDismiss) {
-                        Text("Закрыть")
+                        Text("Закрыть", color = palette.textSecondary)
                     }
                     if (manualQrInput.isNotBlank()) {
                         Spacer(modifier = Modifier.width(8.dp))
-                        Button(onClick = {
-                            val parsed = FnsQrParser.parse(manualQrInput.trim())
-                            if (parsed != null) {
-                                onReceiptDetected(parsed)
-                            } else {
-                                errorMsg = "Не удалось распознать формат ФНС (нужны поля t= и s=)"
-                            }
-                        }) {
-                            Text("Применить")
+                        Button(
+                            onClick = {
+                                val parsed = FnsQrParser.parse(manualQrInput.trim())
+                                if (parsed != null) {
+                                    onReceiptDetected(parsed)
+                                } else {
+                                    errorMsg = "Не удалось распознать формат ФНС (нужны поля t= и s=)"
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = palette.accentEmerald,
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Text("Применить", fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }

@@ -18,7 +18,8 @@ data class CategoryDiagnosis(
     val recommendedLimitRub: Double,
     val expectedByTodayRub: Double,
     val status: Status,
-    val message: String
+    val message: String,
+    val transactionCount: Int
 ) {
     enum class Status { OVERBURNED, ON_TRACK, CAN_SPLURGE }
 }
@@ -29,6 +30,13 @@ data class AiBudgetReport(
     val expectedSpentByTodayRub: Double,
     val safeDailySpendRemainingRub: Double,
     val daysLeftInMonth: Int,
+    val monthProgressRatio: Float,
+    val isCurrentMonth: Boolean,
+    val totalTransactions: Int,
+    val eugeneSpentRub: Double,
+    val anzhelikaSpentRub: Double,
+    val eugeneCount: Int,
+    val anzhelikaCount: Int,
     val headlineVerdict: String,
     val overburnedCategories: List<CategoryDiagnosis>,
     val splurgeCategories: List<CategoryDiagnosis>,
@@ -39,50 +47,91 @@ object AiBudgetAdvisor {
 
     fun buildInstantLocalReport(
         expenses: List<ExpenseEntity>,
-        monthlyBudgetRub: Double
+        monthlyBudgetRub: Double,
+        targetYear: Int? = null,
+        targetMonth: Int? = null
     ): AiBudgetReport {
-        val cal = Calendar.getInstance()
-        val currentMonth = cal.get(Calendar.MONTH)
-        val currentYear = cal.get(Calendar.YEAR)
-        val currentDay = cal.get(Calendar.DAY_OF_MONTH).coerceAtLeast(1)
-        val totalDaysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH).coerceAtLeast(28)
-        val daysLeft = (totalDaysInMonth - currentDay + 1).coerceAtLeast(1)
-        val monthProgressRatio = currentDay.toDouble() / totalDaysInMonth.toDouble()
+        val nowCal = Calendar.getInstance()
+        val nowYear = nowCal.get(Calendar.YEAR)
+        val nowMonth = nowCal.get(Calendar.MONTH)
+
+        val currentYear = targetYear ?: nowYear
+        val currentMonth = targetMonth ?: nowMonth
+        val isCurrentMonth = (currentYear == nowYear && currentMonth == nowMonth)
+        val isPastMonth = (currentYear < nowYear) || (currentYear == nowYear && currentMonth < nowMonth)
+
+        val targetCal = Calendar.getInstance().apply {
+            set(Calendar.YEAR, currentYear)
+            set(Calendar.MONTH, currentMonth)
+            set(Calendar.DAY_OF_MONTH, 1)
+        }
+        val totalDaysInMonth = targetCal.getActualMaximum(Calendar.DAY_OF_MONTH).coerceAtLeast(28)
+
+        val currentDay = when {
+            isCurrentMonth -> nowCal.get(Calendar.DAY_OF_MONTH).coerceAtLeast(1)
+            isPastMonth -> totalDaysInMonth
+            else -> 1
+        }
+        val daysLeft = when {
+            isCurrentMonth -> (totalDaysInMonth - currentDay + 1).coerceAtLeast(1)
+            isPastMonth -> 0
+            else -> totalDaysInMonth
+        }
+        val monthProgressRatio = when {
+            isCurrentMonth -> (currentDay.toDouble() / totalDaysInMonth.toDouble()).coerceIn(0.0, 1.0)
+            isPastMonth -> 1.0
+            else -> 0.0
+        }
 
         val monthExpenses = expenses.filter { exp ->
             val c = Calendar.getInstance().apply { timeInMillis = exp.createdAtEpochMs }
-            c.get(Calendar.MONTH) == currentMonth && c.get(Calendar.YEAR) == currentYear && !exp.isDeleted && !exp.isPendingConfirmation
+            c.get(Calendar.MONTH) == currentMonth &&
+                c.get(Calendar.YEAR) == currentYear &&
+                !exp.isDeleted &&
+                !exp.isPendingConfirmation
         }
 
         val totalSpent = monthExpenses.sumOf { it.amountRub }
         val expectedByToday = monthlyBudgetRub * monthProgressRatio
         val remainingBudget = (monthlyBudgetRub - totalSpent).coerceAtLeast(0.0)
-        val safeDaily = remainingBudget / daysLeft.toDouble()
+        val safeDaily = if (daysLeft > 0) remainingBudget / daysLeft.toDouble() else 0.0
+
+        val eugeneExpenses = monthExpenses.filter { it.authorName.equals("Евгений", ignoreCase = true) }
+        val anzhelikaExpenses = monthExpenses.filter { it.authorName.equals("Анжелика", ignoreCase = true) }
 
         val diagnoses = ExpenseCategory.entries.map { cat ->
-            val catSpent = monthExpenses.filter { it.category == cat }.sumOf { it.amountRub }
+            val catExpenses = monthExpenses.filter { it.category == cat }
+            val catSpent = catExpenses.sumOf { it.amountRub }
             val catLimit = monthlyBudgetRub * (cat.recommendedSharePercent / 100.0)
             val catExpectedToday = catLimit * monthProgressRatio
             val diff = catSpent - catExpectedToday
 
             val status = when {
                 catSpent > catLimit -> CategoryDiagnosis.Status.OVERBURNED
-                diff > catLimit * 0.18 -> CategoryDiagnosis.Status.OVERBURNED
+                isCurrentMonth && diff > catLimit * 0.18 -> CategoryDiagnosis.Status.OVERBURNED
                 catExpectedToday - catSpent > catLimit * 0.20 -> CategoryDiagnosis.Status.CAN_SPLURGE
                 else -> CategoryDiagnosis.Status.ON_TRACK
             }
 
             val msg = when (status) {
                 CategoryDiagnosis.Status.OVERBURNED -> {
-                    val overRub = (catSpent - catExpectedToday).roundToInt()
-                    "Перебор темпа на $overRub ₽ (потрачено ${catSpent.roundToInt()} ₽ из рекомендуемых ${catLimit.roundToInt()} ₽ на месяц)."
+                    val overRub = (catSpent - catExpectedToday).roundToInt().coerceAtLeast(0)
+                    if (isCurrentMonth) {
+                        "Перебор темпа на $overRub ₽"
+                    } else {
+                        "Превышение лимита на ${(catSpent - catLimit).roundToInt().coerceAtLeast(0)} ₽"
+                    }
                 }
                 CategoryDiagnosis.Status.CAN_SPLURGE -> {
-                    val freeRub = (catExpectedToday - catSpent).roundToInt()
-                    "Свободный запас +$freeRub ₽ к текущему дню — можно смело порадовать себя!"
+                    val freeRub = (catExpectedToday - catSpent).roundToInt().coerceAtLeast(0)
+                    if (isCurrentMonth) {
+                        "Свободный запас +$freeRub ₽"
+                    } else {
+                        "Экономия за месяц +$freeRub ₽"
+                    }
                 }
                 CategoryDiagnosis.Status.ON_TRACK -> {
-                    "В рамках нормы: ${catSpent.roundToInt()} ₽ из ${catLimit.roundToInt()} ₽."
+                    "Идёт ровно по плану"
                 }
             }
 
@@ -92,7 +141,8 @@ object AiBudgetAdvisor {
                 recommendedLimitRub = catLimit,
                 expectedByTodayRub = catExpectedToday,
                 status = status,
-                message = msg
+                message = msg,
+                transactionCount = catExpenses.size
             )
         }
 
@@ -103,13 +153,19 @@ object AiBudgetAdvisor {
 
         val headline = when {
             totalSpent > monthlyBudgetRub ->
-                "Внимание: общий месячный бюджет превышен на ${(totalSpent - monthlyBudgetRub).roundToInt()} ₽."
+                "Месячный бюджет превышен на ${(totalSpent - monthlyBudgetRub).roundToInt()} ₽."
+            !isCurrentMonth ->
+                if (isPastMonth) {
+                    "Итог месяца: сэкономлено ${(monthlyBudgetRub - totalSpent).roundToInt()} ₽ из бюджета."
+                } else {
+                    "Плановый период ещё не начался."
+                }
             totalSpent > expectedByToday * 1.12 ->
-                "Темп выше плана на ${(totalSpent - expectedByToday).roundToInt()} ₽. Чтобы уложиться в бюджет, держите ритм около ${safeDaily.roundToInt()} ₽/день."
+                "Темп выше плана на ${(totalSpent - expectedByToday).roundToInt()} ₽. Комфортный ритм до конца месяца — ${safeDaily.roundToInt()} ₽/день."
             totalSpent < expectedByToday * 0.85 ->
-                "Отличный запас! Вы сэкономили ${(expectedByToday - totalSpent).roundToInt()} ₽ относительно графика — можно позволить себе приятные покупки."
+                "Отличный запас! Вы ниже графика на ${(expectedByToday - totalSpent).roundToInt()} ₽ — можно спокойно позволить приятные траты."
             else ->
-                "Идёте точно по графику! Комфортный дневной лимит до конца месяца: ${safeDaily.roundToInt()} ₽/день."
+                "Ровный темп по графику. Безопасный дневной ритм: ${safeDaily.roundToInt()} ₽/день."
         }
 
         return AiBudgetReport(
@@ -118,6 +174,13 @@ object AiBudgetAdvisor {
             expectedSpentByTodayRub = expectedByToday,
             safeDailySpendRemainingRub = safeDaily,
             daysLeftInMonth = daysLeft,
+            monthProgressRatio = monthProgressRatio.toFloat(),
+            isCurrentMonth = isCurrentMonth,
+            totalTransactions = monthExpenses.size,
+            eugeneSpentRub = eugeneExpenses.sumOf { it.amountRub },
+            anzhelikaSpentRub = anzhelikaExpenses.sumOf { it.amountRub },
+            eugeneCount = eugeneExpenses.size,
+            anzhelikaCount = anzhelikaExpenses.size,
             headlineVerdict = headline,
             overburnedCategories = overburned,
             splurgeCategories = splurge,

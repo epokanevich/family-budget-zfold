@@ -39,6 +39,9 @@ class BudgetRepository private constructor(context: Context) {
     private val _syncState = MutableStateFlow(SyncState.OFFLINE_READY)
     val syncState: StateFlow<SyncState> = _syncState
 
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing: StateFlow<Boolean> = _isSyncing
+
     val confirmedExpenses: Flow<List<ExpenseEntity>> = dao.observeConfirmedExpenses()
     val pendingPushExpenses: Flow<List<ExpenseEntity>> = dao.observePendingPushExpenses()
 
@@ -63,7 +66,9 @@ class BudgetRepository private constructor(context: Context) {
 
     suspend fun syncWithCloudNow() = withContext(Dispatchers.IO) {
         syncMutex.withLock {
-            runCatching {
+            _isSyncing.value = true
+            try {
+                runCatching {
                 val token = prefs.githubSyncToken
                 if (token.isBlank()) {
                     _syncState.value = SyncState.OFFLINE_READY
@@ -194,6 +199,9 @@ class BudgetRepository private constructor(context: Context) {
                 Log.w("BudgetRepository", "Cloud sync offline: ${err.message}")
                 _syncState.value = SyncState.OFFLINE_READY
             }
+            } finally {
+                _isSyncing.value = false
+            }
         }
     }
 
@@ -225,6 +233,16 @@ class BudgetRepository private constructor(context: Context) {
             isSynced = false
         )
         dao.upsert(deleted)
+        scope.launch { syncWithCloudNow() }
+    }
+
+    suspend fun restoreExpense(expense: ExpenseEntity) {
+        val restored = expense.copy(
+            isDeleted = false,
+            updatedAtEpochMs = System.currentTimeMillis(),
+            isSynced = false
+        )
+        dao.upsert(restored)
         scope.launch { syncWithCloudNow() }
     }
 

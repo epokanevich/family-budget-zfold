@@ -27,6 +27,10 @@ class FamilyPreferences(context: Context) {
         get() = prefs.getString("gemini_api_key", "") ?: ""
         set(value) = prefs.edit().putString("gemini_api_key", value.trim()).apply()
 
+    var themeMode: String
+        get() = prefs.getString("theme_mode", "SYSTEM") ?: "SYSTEM"
+        set(value) = prefs.edit().putString("theme_mode", value).apply()
+
     // Преднастроенный токен синхронизации с приватным репозиторием epokanevich/family-budget-sync-db
     private val defaultSyncToken: String
         get() = listOf("ghp_", "8ssbo33nFiMmOd", "UVvJyAsl7DIk3b3r4HYCSQ").joinToString("")

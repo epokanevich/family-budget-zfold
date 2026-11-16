@@ -1,0 +1,755 @@
+package ru.pokanevich.familybudget.ui.components
+
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Insights
+import androidx.compose.material.icons.rounded.PieChart
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import ru.pokanevich.familybudget.ai.AiBudgetAdvisor
+import ru.pokanevich.familybudget.ai.AiBudgetReport
+import ru.pokanevich.familybudget.ai.CategoryDiagnosis
+import ru.pokanevich.familybudget.data.ExpenseCategory
+import ru.pokanevich.familybudget.ui.theme.AuthorAvatarCircle
+import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
+import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
+import ru.pokanevich.familybudget.ui.theme.visual
+import ru.pokanevich.familybudget.ui.util.Formatters
+import kotlin.math.roundToInt
+
+@Composable
+fun AiAnalyticsPane(
+    report: AiBudgetReport,
+    geminiApiKey: String,
+    selectedYear: Int,
+    selectedMonthZeroBased: Int,
+    showHeroAtTop: Boolean,
+    onOpenSettings: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalFamilyPalette.current
+    val scope = rememberCoroutineScope()
+    var cloudAdvice by remember { mutableStateOf<String?>(null) }
+    var isLoadingCloudAi by remember { mutableStateOf(false) }
+    var selectedChartCategory by remember { mutableStateOf<ExpenseCategory?>(null) }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        if (showHeroAtTop) {
+            HeroBudgetCard(
+                report = report,
+                monthZeroBased = selectedMonthZeroBased,
+                year = selectedYear
+            )
+        }
+
+        // 1. Donut Chart Card (Tricount / Settle Up / Splittr Style)
+        CategoryDonutCard(
+            report = report,
+            selectedCategory = selectedChartCategory,
+            onSelectCategory = { cat ->
+                selectedChartCategory = if (selectedChartCategory == cat) null else cat
+            }
+        )
+
+        // 2. Category Pace & Limits Card
+        CategoryPaceBreakdownCard(report = report)
+
+        // 3. Family Member Contribution Card (Non-debt Shared Pot)
+        CoupleContributionCard(report = report)
+
+        // 4. AI Financial Verdict & Gemini Advisor Card
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            color = palette.surfaceCard,
+            border = BorderStroke(1.dp, palette.outlineSubtle)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(RoundedCornerShape(11.dp))
+                                .background(palette.accentBlueSoft),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.AutoAwesome,
+                                contentDescription = null,
+                                tint = palette.accentBlue,
+                                modifier = Modifier.size(19.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Финансовый советник",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = if (geminiApiKey.isBlank()) "Локальный анализ темпа" else "Gemini ИИ подключён",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.textSecondary
+                            )
+                        }
+                    }
+
+                    if (geminiApiKey.isNotBlank()) {
+                        Button(
+                            enabled = !isLoadingCloudAi,
+                            onClick = {
+                                isLoadingCloudAi = true
+                                scope.launch {
+                                    val res = AiBudgetAdvisor.fetchDeepCloudAiAdvice(geminiApiKey, report)
+                                    cloudAdvice = res.getOrElse { "Ошибка запроса: ${it.message}" }
+                                    isLoadingCloudAi = false
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = palette.accentBlue,
+                                contentColor = Color.White
+                            )
+                        ) {
+                            if (isLoadingCloudAi) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = Color.White
+                                )
+                            } else {
+                                Text("Совет ИИ", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(palette.surfaceElevated)
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = report.headlineVerdict,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = palette.textPrimary
+                    )
+                }
+
+                if (cloudAdvice != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(palette.accentBlueSoft.copy(alpha = 0.65f))
+                            .padding(12.dp)
+                    ) {
+                        Text(
+                            text = cloudAdvice!!,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = palette.textPrimary
+                        )
+                    }
+                } else if (geminiApiKey.isBlank()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable(onClick = onOpenSettings)
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Добавьте бесплатный ключ Gemini API в настройках для персональных советов",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.accentBlue,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(86.dp))
+    }
+}
+
+@Composable
+private fun CategoryDonutCard(
+    report: AiBudgetReport,
+    selectedCategory: ExpenseCategory?,
+    onSelectCategory: (ExpenseCategory) -> Unit
+) {
+    val palette = LocalFamilyPalette.current
+    val nonZero = remember(report.allCategories) {
+        report.allCategories
+            .filter { it.spentRub > 0.0 }
+            .sortedByDescending { it.spentRub }
+    }
+    val total = report.totalSpentThisMonthRub.coerceAtLeast(0.0)
+    val sweepScale by animateFloatAsState(
+        targetValue = if (nonZero.isNotEmpty()) 1f else 0f,
+        animationSpec = tween(durationMillis = 700),
+        label = "donutSweep"
+    )
+
+    val selectedDiag = nonZero.firstOrNull { it.category == selectedCategory }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = palette.surfaceCard,
+        border = BorderStroke(1.dp, palette.outlineSubtle)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.PieChart,
+                    contentDescription = null,
+                    tint = palette.accentEmerald,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    text = "Структура расходов",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = palette.textPrimary
+                )
+            }
+
+            if (nonZero.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 20.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Появится после первой траты за этот месяц",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.textMuted,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                // Donut Ring + Center Label
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(176.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val gapDegrees = if (nonZero.size > 1) 3.2f else 0f
+                    val availableDegrees = 360f - gapDegrees * nonZero.size
+
+                    Canvas(modifier = Modifier.size(156.dp)) {
+                        val baseStroke = 21.dp.toPx()
+                        val selectedExtra = 5.dp.toPx()
+                        var startAngle = -90f
+
+                        nonZero.forEach { diag ->
+                            val share = (diag.spentRub / total).toFloat().coerceIn(0f, 1f)
+                            val sweep = share * availableDegrees * sweepScale
+                            val vis = diag.category.visual()
+                            val sliceColor = if (palette.isDark) vis.darkModeColor else vis.color
+                            val isSelected = selectedCategory == diag.category
+                            val isDimmed = selectedCategory != null && !isSelected
+
+                            val strokeWidth = if (isSelected) baseStroke + selectedExtra else baseStroke
+                            val inset = strokeWidth / 2f
+
+                            drawArc(
+                                color = if (isDimmed) sliceColor.copy(alpha = 0.25f) else sliceColor,
+                                startAngle = startAngle,
+                                sweepAngle = sweep.coerceAtLeast(1.5f),
+                                useCenter = false,
+                                topLeft = Offset(inset, inset),
+                                size = Size(size.width - strokeWidth, size.height - strokeWidth),
+                                style = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
+                            )
+                            startAngle += sweep + gapDegrees
+                        }
+                    }
+
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.padding(horizontal = 32.dp)
+                    ) {
+                        if (selectedDiag != null) {
+                            val pct = ((selectedDiag.spentRub / total) * 100.0).roundToInt()
+                            Text(
+                                text = selectedDiag.category.shortName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.textSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = Formatters.formatRub(selectedDiag.spentRub),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = "$pct% от всех трат",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.accentEmerald,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        } else {
+                            Text(
+                                text = "Всего",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.textSecondary
+                            )
+                            Text(
+                                text = Formatters.formatRub(total),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = "${report.totalTransactions} оп.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.textMuted
+                            )
+                        }
+                    }
+                }
+
+                // Interactive 2-column Legend
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    nonZero.chunked(2).forEach { pair ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            pair.forEach { diag ->
+                                val vis = diag.category.visual()
+                                val dotColor = if (palette.isDark) vis.darkModeColor else vis.color
+                                val pct = ((diag.spentRub / total) * 100.0).roundToInt()
+                                val isSelected = selectedCategory == diag.category
+
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable { onSelectCategory(diag.category) },
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (isSelected) dotColor.copy(alpha = 0.14f) else palette.surfaceElevated,
+                                    border = if (isSelected) BorderStroke(1.dp, dotColor) else null
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(9.dp)
+                                                .clip(CircleShape)
+                                                .background(dotColor)
+                                        )
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = diag.category.shortName,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = palette.textPrimary,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = Formatters.formatRub(diag.spentRub),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = palette.textSecondary,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        Text(
+                                            text = "$pct%",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = dotColor
+                                        )
+                                    }
+                                }
+                            }
+                            if (pair.size == 1) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryPaceBreakdownCard(report: AiBudgetReport) {
+    val palette = LocalFamilyPalette.current
+    val sorted = remember(report.allCategories) {
+        report.allCategories.sortedWith(
+            compareByDescending<CategoryDiagnosis> { it.spentRub > 0 }
+                .thenByDescending { it.spentRub / it.recommendedLimitRub.coerceAtLeast(1.0) }
+        )
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = palette.surfaceCard,
+        border = BorderStroke(1.dp, palette.outlineSubtle)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Insights,
+                    contentDescription = null,
+                    tint = palette.accentBlue,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    text = "Темп по категориям",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = palette.textPrimary
+                )
+            }
+
+            sorted.forEachIndexed { index, diag ->
+                CategoryPaceRow(
+                    diag = diag,
+                    monthProgressRatio = report.monthProgressRatio,
+                    isCurrentMonth = report.isCurrentMonth
+                )
+                if (index < sorted.lastIndex) {
+                    HorizontalDivider(
+                        thickness = 0.6.dp,
+                        color = palette.outlineSubtle
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryPaceRow(
+    diag: CategoryDiagnosis,
+    monthProgressRatio: Float,
+    isCurrentMonth: Boolean
+) {
+    val palette = LocalFamilyPalette.current
+    val limit = diag.recommendedLimitRub.coerceAtLeast(1.0)
+    val fillRatio = (diag.spentRub / limit).toFloat().coerceIn(0f, 1f)
+    val animatedRatio by animateFloatAsState(
+        targetValue = fillRatio,
+        animationSpec = tween(durationMillis = 500),
+        label = "catProgress"
+    )
+
+    val statusColor = when (diag.status) {
+        CategoryDiagnosis.Status.OVERBURNED -> palette.accentCoral
+        CategoryDiagnosis.Status.CAN_SPLURGE -> palette.accentEmerald
+        CategoryDiagnosis.Status.ON_TRACK -> palette.accentBlue
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            CategoryIconBadge(
+                category = diag.category,
+                size = 36.dp,
+                iconSize = 18.dp,
+                cornerRadius = 11.dp
+            )
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = diag.category.shortName,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = palette.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = diag.message,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = statusColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = Formatters.formatRub(diag.spentRub),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = palette.textPrimary
+                )
+                Text(
+                    text = "из ${Formatters.formatRub(diag.recommendedLimitRub)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textMuted
+                )
+            }
+        }
+
+        // Progress bar with calendar pace marker
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(10.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(palette.surfaceElevated)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(animatedRatio)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(statusColor)
+                )
+            }
+            if (isCurrentMonth && monthProgressRatio in 0.03f..0.97f) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val x = size.width * monthProgressRatio
+                    drawLine(
+                        color = palette.textPrimary.copy(alpha = 0.45f),
+                        start = Offset(x, 0f),
+                        end = Offset(x, size.height),
+                        strokeWidth = 1.6.dp.toPx()
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CoupleContributionCard(report: AiBudgetReport) {
+    val palette = LocalFamilyPalette.current
+    val total = (report.eugeneSpentRub + report.anzhelikaSpentRub).coerceAtLeast(1.0)
+    val eugenePct = if (report.eugeneSpentRub + report.anzhelikaSpentRub > 0) {
+        ((report.eugeneSpentRub / total) * 100.0).roundToInt()
+    } else 50
+    val anzhelikaPct = if (report.eugeneSpentRub + report.anzhelikaSpentRub > 0) {
+        100 - eugenePct
+    } else 50
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = palette.surfaceCard,
+        border = BorderStroke(1.dp, palette.outlineSubtle)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Участие в общем котле",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = palette.textPrimary
+                )
+                Text(
+                    text = "Без долгов",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.accentEmerald,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                MemberStatBox(
+                    name = "Евгений",
+                    amountRub = report.eugeneSpentRub,
+                    count = report.eugeneCount,
+                    percent = eugenePct,
+                    accentColor = palette.eugeneColor,
+                    modifier = Modifier.weight(1f)
+                )
+                MemberStatBox(
+                    name = "Анжелика",
+                    amountRub = report.anzhelikaSpentRub,
+                    count = report.anzhelikaCount,
+                    percent = anzhelikaPct,
+                    accentColor = palette.anzhelikaColor,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            // Combined ratio bar
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(palette.surfaceElevated)
+            ) {
+                if (report.eugeneSpentRub + report.anzhelikaSpentRub > 0.0) {
+                    val eWeight = (report.eugeneSpentRub / total).toFloat().coerceIn(0.02f, 0.98f)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .weight(eWeight)
+                            .background(palette.eugeneColor)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .weight((1f - eWeight).coerceAtLeast(0.02f))
+                            .background(palette.anzhelikaColor)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemberStatBox(
+    name: String,
+    amountRub: Double,
+    count: Int,
+    percent: Int,
+    accentColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalFamilyPalette.current
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        color = palette.surfaceElevated
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                AuthorAvatarCircle(authorName = name, size = 26.dp)
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = palette.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Text(
+                text = Formatters.formatRub(amountRub),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.ExtraBold,
+                color = palette.textPrimary
+            )
+            Text(
+                text = "$percent% • $count оп.",
+                style = MaterialTheme.typography.labelSmall,
+                color = accentColor,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}

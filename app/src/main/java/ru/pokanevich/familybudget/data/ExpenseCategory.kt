@@ -2,17 +2,18 @@ package ru.pokanevich.familybudget.data
 
 enum class ExpenseCategory(
     val displayName: String,
+    val shortName: String,
     val emoji: String,
     val recommendedSharePercent: Int
 ) {
-    GROCERIES("Продукты и супермаркеты", "🛒", 35),
-    BABY_AND_PETS("Ребёнок и кошки", "🍼", 15),
-    CAFES_AND_DELIVERY("Кафе, кофе и доставка", "☕", 10),
-    HOME_AND_UTILITIES("Дом, ЖКХ и быт", "🏠", 15),
-    TRANSPORT_AND_MOTO("Транспорт, авто и мото", "🏍️", 10),
-    HEALTH_AND_PHARMACY("Аптеки и здоровье", "💊", 5),
-    LEISURE_AND_HOBBIES("Досуг, игры и подписки", "🎮", 5),
-    OTHER("Прочие покупки", "📦", 5);
+    GROCERIES("Продукты и супермаркеты", "Продукты", "🛒", 35),
+    BABY_AND_PETS("Ребёнок и кошки", "Малыш и кот", "🍼", 15),
+    CAFES_AND_DELIVERY("Кафе, кофе и доставка", "Кафе", "☕", 10),
+    HOME_AND_UTILITIES("Дом, ЖКХ и быт", "Дом и ЖКХ", "🏠", 15),
+    TRANSPORT_AND_MOTO("Транспорт, авто и мото", "Транспорт", "🏍️", 10),
+    HEALTH_AND_PHARMACY("Аптеки и здоровье", "Здоровье", "💊", 5),
+    LEISURE_AND_HOBBIES("Досуг, игры и подписки", "Досуг", "🎮", 5),
+    OTHER("Прочие покупки", "Прочее", "📦", 5);
 
     companion object {
         fun guessFromMerchant(merchantRaw: String): ExpenseCategory {

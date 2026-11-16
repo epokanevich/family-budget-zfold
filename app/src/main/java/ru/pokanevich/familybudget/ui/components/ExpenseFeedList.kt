@@ -1,0 +1,668 @@
+package ru.pokanevich.familybudget.ui.components
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AccountBalanceWallet
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ChevronLeft
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import ru.pokanevich.familybudget.ai.AiBudgetReport
+import ru.pokanevich.familybudget.data.ExpenseCategory
+import ru.pokanevich.familybudget.data.ExpenseEntity
+import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
+import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
+import ru.pokanevich.familybudget.ui.util.Formatters
+import java.util.Calendar
+
+enum class FeedFilter(val label: String) {
+    ALL("Все"),
+    EUGENE("Евгений"),
+    ANZHELIKA("Анжелика")
+}
+
+@Composable
+fun MonthSwitcherBar(
+    selectedYear: Int,
+    selectedMonthZeroBased: Int,
+    isCurrentMonth: Boolean,
+    onPrevMonth: () -> Unit,
+    onNextMonth: () -> Unit,
+    onJumpToCurrentMonth: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalFamilyPalette.current
+
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = palette.surfaceCard,
+            border = BorderStroke(1.dp, palette.outlineSubtle)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+            ) {
+                IconButton(
+                    onClick = onPrevMonth,
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.ChevronLeft,
+                        contentDescription = "Предыдущий месяц",
+                        tint = palette.textPrimary
+                    )
+                }
+
+                Text(
+                    text = Formatters.formatMonthTitle(selectedYear, selectedMonthZeroBased),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = palette.textPrimary,
+                    modifier = Modifier.padding(horizontal = 6.dp)
+                )
+
+                IconButton(
+                    onClick = onNextMonth,
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.ChevronRight,
+                        contentDescription = "Следующий месяц",
+                        tint = palette.textPrimary
+                    )
+                }
+            }
+        }
+
+        if (!isCurrentMonth) {
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = palette.accentEmeraldSoft,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .clickable(onClick = onJumpToCurrentMonth)
+            ) {
+                Text(
+                    text = "Текущий месяц",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = palette.accentEmerald,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ExpensesFeedPane(
+    confirmedExpenses: List<ExpenseEntity>,
+    pendingPushExpenses: List<ExpenseEntity>,
+    report: AiBudgetReport,
+    selectedYear: Int,
+    selectedMonthZeroBased: Int,
+    isCurrentMonth: Boolean,
+    showHeroInline: Boolean,
+    isPushAccessGranted: Boolean,
+    onPrevMonth: () -> Unit,
+    onNextMonth: () -> Unit,
+    onJumpToCurrentMonth: () -> Unit,
+    onOpenPushSettings: () -> Unit,
+    onConfirmPending: (ExpenseEntity, ExpenseCategory) -> Unit,
+    onDismissPending: (ExpenseEntity) -> Unit,
+    onExpenseClick: (ExpenseEntity) -> Unit,
+    onAddClick: () -> Unit
+) {
+    val palette = LocalFamilyPalette.current
+    var searchQuery by remember { mutableStateOf("") }
+    var authorFilter by remember { mutableStateOf(FeedFilter.ALL) }
+    var selectedCategoryFilter by remember { mutableStateOf<ExpenseCategory?>(null) }
+
+    val monthExpenses = remember(confirmedExpenses, selectedYear, selectedMonthZeroBased) {
+        confirmedExpenses.filter { exp ->
+            val cal = Calendar.getInstance().apply { timeInMillis = exp.createdAtEpochMs }
+            cal.get(Calendar.YEAR) == selectedYear && cal.get(Calendar.MONTH) == selectedMonthZeroBased
+        }
+    }
+
+    val filteredExpenses = remember(monthExpenses, searchQuery, authorFilter, selectedCategoryFilter) {
+        val q = searchQuery.trim().lowercase()
+        monthExpenses.filter { exp ->
+            val matchesQuery = q.isEmpty() ||
+                exp.merchant.lowercase().contains(q) ||
+                exp.category.displayName.lowercase().contains(q)
+            val matchesAuthor = when (authorFilter) {
+                FeedFilter.ALL -> true
+                FeedFilter.EUGENE -> exp.authorName.equals("Евгений", ignoreCase = true)
+                FeedFilter.ANZHELIKA -> exp.authorName.equals("Анжелика", ignoreCase = true)
+            }
+            val matchesCategory = selectedCategoryFilter == null || exp.category == selectedCategoryFilter
+            matchesQuery && matchesAuthor && matchesCategory
+        }
+    }
+
+    val groupedByDay = remember(filteredExpenses) {
+        filteredExpenses
+            .groupBy { Formatters.dayKey(it.createdAtEpochMs) }
+            .entries
+            .sortedByDescending { it.key }
+            .map { entry ->
+                DayExpenseGroup(
+                    dayKey = entry.key,
+                    headerTitle = Formatters.formatDayHeader(entry.value.first().createdAtEpochMs),
+                    dayTotal = entry.value.sumOf { it.amountRub },
+                    items = entry.value.sortedByDescending { it.createdAtEpochMs }
+                )
+            }
+    }
+
+    val activeCategories = remember(monthExpenses) {
+        monthExpenses.map { it.category }.distinct()
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(top = 4.dp, bottom = 96.dp)
+    ) {
+        item {
+            MonthSwitcherBar(
+                selectedYear = selectedYear,
+                selectedMonthZeroBased = selectedMonthZeroBased,
+                isCurrentMonth = isCurrentMonth,
+                onPrevMonth = onPrevMonth,
+                onNextMonth = onNextMonth,
+                onJumpToCurrentMonth = onJumpToCurrentMonth
+            )
+        }
+
+        if (showHeroInline) {
+            item {
+                HeroBudgetCard(
+                    report = report,
+                    monthZeroBased = selectedMonthZeroBased,
+                    year = selectedYear
+                )
+            }
+        }
+
+        if (!isPushAccessGranted) {
+            item {
+                PushPermissionBanner(onOpenPushSettings = onOpenPushSettings)
+            }
+        }
+
+        if (pendingPushExpenses.isNotEmpty()) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Новые из банка",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = palette.textPrimary
+                    )
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(palette.accentBlueSoft)
+                            .padding(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "${pendingPushExpenses.size}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.accentBlue,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+            items(pendingPushExpenses, key = { "pending_${it.id}" }) { pending ->
+                PendingPushCard(
+                    expense = pending,
+                    onConfirm = { cat -> onConfirmPending(pending, cat) },
+                    onDismiss = { onDismissPending(pending) }
+                )
+            }
+        }
+
+        // Search & Quick Filter Bar
+        if (monthExpenses.isNotEmpty() || searchQuery.isNotBlank()) {
+            item {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SearchInputPill(
+                        query = searchQuery,
+                        onQueryChange = { searchQuery = it }
+                    )
+
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(FeedFilter.entries) { filter ->
+                            val selected = authorFilter == filter && selectedCategoryFilter == null
+                            FilterPillChip(
+                                label = filter.label,
+                                selected = selected,
+                                accentColor = when (filter) {
+                                    FeedFilter.EUGENE -> palette.eugeneColor
+                                    FeedFilter.ANZHELIKA -> palette.anzhelikaColor
+                                    FeedFilter.ALL -> palette.accentEmerald
+                                },
+                                onClick = {
+                                    authorFilter = filter
+                                    if (filter == FeedFilter.ALL) {
+                                        selectedCategoryFilter = null
+                                    }
+                                }
+                            )
+                        }
+
+                        items(activeCategories) { cat ->
+                            val selected = selectedCategoryFilter == cat
+                            FilterPillChip(
+                                label = cat.shortName,
+                                selected = selected,
+                                accentColor = palette.accentEmerald,
+                                onClick = {
+                                    selectedCategoryFilter = if (selected) null else cat
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (groupedByDay.isEmpty()) {
+            item {
+                EmptyFeedCard(
+                    hasMonthExpenses = monthExpenses.isNotEmpty(),
+                    onResetFilters = {
+                        searchQuery = ""
+                        authorFilter = FeedFilter.ALL
+                        selectedCategoryFilter = null
+                    },
+                    onAddClick = onAddClick
+                )
+            }
+        } else {
+            groupedByDay.forEach { group ->
+                item(key = "header_${group.dayKey}") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = group.headerTitle,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = palette.textSecondary
+                        )
+                        Text(
+                            text = Formatters.formatRub(group.dayTotal),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = palette.textMuted,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+
+                item(key = "card_${group.dayKey}") {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp),
+                        color = palette.surfaceCard,
+                        border = BorderStroke(1.dp, palette.outlineSubtle)
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            group.items.forEachIndexed { index, expense ->
+                                ExpenseTransactionRow(
+                                    expense = expense,
+                                    onClick = { onExpenseClick(expense) }
+                                )
+                                if (index < group.items.lastIndex) {
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(start = 68.dp, end = 14.dp),
+                                        thickness = 0.7.dp,
+                                        color = palette.outlineSubtle
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private data class DayExpenseGroup(
+    val dayKey: Long,
+    val headerTitle: String,
+    val dayTotal: Double,
+    val items: List<ExpenseEntity>
+)
+
+@Composable
+private fun ExpenseTransactionRow(
+    expense: ExpenseEntity,
+    onClick: () -> Unit
+) {
+    val palette = LocalFamilyPalette.current
+    val isAnzhelika = expense.authorName.equals("Анжелика", ignoreCase = true)
+    val authorColor = if (isAnzhelika) palette.anzhelikaColor else palette.eugeneColor
+
+    val sourceTag = when (expense.sourceType) {
+        "PUSH_SBER" -> "Сбер"
+        "PUSH_MIRPAY" -> "Mir Pay"
+        "QR_RECEIPT" -> "Чек ФНС"
+        else -> null
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        CategoryIconBadge(
+            category = expense.category,
+            size = 42.dp,
+            iconSize = 20.dp,
+            cornerRadius = 13.dp
+        )
+
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Text(
+                text = expense.merchant,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = palette.textPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(7.dp)
+                        .clip(CircleShape)
+                        .background(authorColor)
+                )
+                Text(
+                    text = expense.authorName,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textSecondary,
+                    maxLines = 1
+                )
+                Text(
+                    text = "•",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textMuted
+                )
+                Text(
+                    text = expense.category.shortName,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (sourceTag != null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(palette.surfaceElevated)
+                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = sourceTag,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.textSecondary
+                        )
+                    }
+                }
+            }
+        }
+
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                text = Formatters.formatRub(expense.amountRub, showKopecksIfAny = true),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = palette.textPrimary
+            )
+            Text(
+                text = Formatters.formatTimeOnly(expense.createdAtEpochMs),
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textMuted
+            )
+        }
+    }
+}
+
+@Composable
+private fun SearchInputPill(
+    query: String,
+    onQueryChange: (String) -> Unit
+) {
+    val palette = LocalFamilyPalette.current
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = palette.surfaceCard,
+        border = BorderStroke(1.dp, palette.outlineSubtle)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = null,
+                tint = palette.textMuted,
+                modifier = Modifier.size(18.dp)
+            )
+            Box(modifier = Modifier.weight(1f)) {
+                if (query.isEmpty()) {
+                    Text(
+                        text = "Поиск по магазину или категории...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = palette.textMuted
+                    )
+                }
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = palette.textPrimary),
+                    cursorBrush = SolidColor(palette.accentEmerald),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+            if (query.isNotEmpty()) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Очистить поиск",
+                    tint = palette.textMuted,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .clickable { onQueryChange("") }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FilterPillChip(
+    label: String,
+    selected: Boolean,
+    accentColor: Color,
+    onClick: () -> Unit
+) {
+    val palette = LocalFamilyPalette.current
+    Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = if (selected) accentColor.copy(alpha = 0.14f) else palette.surfaceCard,
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (selected) accentColor else palette.outlineSubtle
+        ),
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) accentColor else palette.textSecondary,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+        )
+    }
+}
+
+@Composable
+private fun EmptyFeedCard(
+    hasMonthExpenses: Boolean,
+    onResetFilters: () -> Unit,
+    onAddClick: () -> Unit
+) {
+    val palette = LocalFamilyPalette.current
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = palette.surfaceCard,
+        border = BorderStroke(1.dp, palette.outlineSubtle)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(palette.accentEmeraldSoft),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.AccountBalanceWallet,
+                    contentDescription = null,
+                    tint = palette.accentEmerald,
+                    modifier = Modifier.size(26.dp)
+                )
+            }
+
+            Text(
+                text = if (hasMonthExpenses) "Ничего не найдено" else "В этом месяце пока чисто",
+                style = MaterialTheme.typography.titleMedium,
+                color = palette.textPrimary
+            )
+
+            Text(
+                text = if (hasMonthExpenses) {
+                    "Попробуйте изменить поисковый запрос или сбросить фильтр."
+                } else {
+                    "Добавьте первую покупку вручную, отсканируйте QR-код чека ФНС или дождитесь пуша от Сбера."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = palette.textSecondary,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(2.dp))
+
+            Button(
+                onClick = if (hasMonthExpenses) onResetFilters else onAddClick,
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = palette.accentEmerald,
+                    contentColor = Color.White
+                )
+            ) {
+                if (!hasMonthExpenses) {
+                    Icon(
+                        imageVector = Icons.Rounded.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text(
+                    text = if (hasMonthExpenses) "Сбросить фильтры" else "Добавить трату",
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+    }
+}
