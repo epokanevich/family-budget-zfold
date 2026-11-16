@@ -197,11 +197,13 @@ fun ExpensesFeedPane(
     window: PeriodWindow,
     showHeroInline: Boolean,
     isPushAccessGranted: Boolean,
+    isBatteryUnrestricted: Boolean,
     onSelectPeriod: (BudgetPeriod) -> Unit,
     onPrevPeriod: () -> Unit,
     onNextPeriod: () -> Unit,
     onJumpToCurrent: () -> Unit,
     onOpenPushSettings: () -> Unit,
+    onRequestBatteryExemption: () -> Unit,
     onConfirmPending: (ExpenseEntity, ExpenseCategory) -> Unit,
     onDismissPending: (ExpenseEntity) -> Unit,
     onExpenseClick: (ExpenseEntity) -> Unit,
@@ -284,6 +286,10 @@ fun ExpensesFeedPane(
         if (!isPushAccessGranted) {
             item {
                 PushPermissionBanner(onOpenPushSettings = onOpenPushSettings)
+            }
+        } else if (!isBatteryUnrestricted) {
+            item {
+                BatteryExemptionBanner(onRequestBatteryExemption = onRequestBatteryExemption)
             }
         }
 

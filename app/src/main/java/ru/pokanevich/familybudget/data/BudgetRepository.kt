@@ -342,7 +342,7 @@ class BudgetRepository private constructor(context: Context) {
         rawText: String
     ) {
         val now = System.currentTimeMillis()
-        val normalizedAmount = String.format("%.2f", amountRub)
+        val normalizedAmount = String.format(java.util.Locale.US, "%.2f", amountRub)
         val signature = "AMT_$normalizedAmount"
         val duplicate = dao.findRecentDuplicate(signature, now - 90_000L)
         if (duplicate != null && !duplicate.isDeleted) {

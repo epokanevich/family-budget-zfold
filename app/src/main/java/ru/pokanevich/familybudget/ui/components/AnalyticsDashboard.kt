@@ -89,6 +89,7 @@ fun AiAnalyticsPane(
     val palette = LocalFamilyPalette.current
     val scope = rememberCoroutineScope()
     var cloudAdvice by remember { mutableStateOf<String?>(null) }
+    var cloudModelUsed by remember { mutableStateOf<String?>(null) }
     var isLoadingCloudAi by remember { mutableStateOf(false) }
     var selectedChartCategory by remember { mutableStateOf<ExpenseCategory?>(null) }
     var showIncomesInChart by remember { mutableStateOf(false) }
@@ -174,40 +175,48 @@ fun AiAnalyticsPane(
                                 color = palette.textPrimary
                             )
                             Text(
-                                text = if (geminiApiKey.isBlank()) "Локальный анализ темпа" else "Gemini ИИ подключён",
+                                text = if (cloudModelUsed != null) {
+                                    "Gemini ($cloudModelUsed)"
+                                } else {
+                                    "Gemini ИИ готов (автоподбор модели)"
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = palette.textSecondary
                             )
                         }
                     }
 
-                    if (geminiApiKey.isNotBlank()) {
-                        Button(
-                            enabled = !isLoadingCloudAi,
-                            onClick = {
-                                isLoadingCloudAi = true
-                                scope.launch {
-                                    val res = AiBudgetAdvisor.fetchDeepCloudAiAdvice(geminiApiKey, report)
-                                    cloudAdvice = res.getOrElse { "Ошибка запроса: ${it.message}" }
-                                    isLoadingCloudAi = false
+                    Button(
+                        enabled = !isLoadingCloudAi && geminiApiKey.isNotBlank(),
+                        onClick = {
+                            isLoadingCloudAi = true
+                            scope.launch {
+                                val res = AiBudgetAdvisor.fetchDeepCloudAiAdvice(geminiApiKey, report)
+                                res.onSuccess { advice ->
+                                    cloudAdvice = advice.text
+                                    cloudModelUsed = advice.modelUsed
+                                }.onFailure { err ->
+                                    cloudAdvice = "Ошибка запроса: ${err.message}"
+                                    cloudModelUsed = null
                                 }
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = palette.accentBlue,
-                                contentColor = Color.White
-                            )
-                        ) {
-                            if (isLoadingCloudAi) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(14.dp),
-                                    strokeWidth = 2.dp,
-                                    color = Color.White
-                                )
-                            } else {
-                                Text("Совет ИИ", style = MaterialTheme.typography.labelMedium)
+                                isLoadingCloudAi = false
                             }
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = palette.accentBlue,
+                            contentColor = Color.White
+                        )
+                    ) {
+                        if (isLoadingCloudAi) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = Color.White
+                            )
+                        } else {
+                            Text("Совет ИИ", style = MaterialTheme.typography.labelMedium)
                         }
                     }
                 }

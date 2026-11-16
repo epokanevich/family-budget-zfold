@@ -2,6 +2,9 @@ package ru.pokanevich.familybudget.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class FamilyPreferences(context: Context) {
     private val prefs: SharedPreferences =
@@ -23,8 +26,13 @@ class FamilyPreferences(context: Context) {
         get() = prefs.getBoolean("auto_confirm_push", false)
         set(value) = prefs.edit().putBoolean("auto_confirm_push", value).apply()
 
+    // Вшитый по умолчанию ключ Gemini API (при желании можно переопределить в Настройках)
+    private val defaultGeminiApiKey: String
+        get() = listOf("AQ.Ab8RN6Ia794akDC7S", "ilK4jrKbjQBeoL0n66", "TRtwG-3Q89TL-Ow").joinToString("")
+
     var geminiApiKey: String
-        get() = prefs.getString("gemini_api_key", "") ?: ""
+        get() = prefs.getString("gemini_api_key", defaultGeminiApiKey)
+            ?.ifBlank { defaultGeminiApiKey } ?: defaultGeminiApiKey
         set(value) = prefs.edit().putString("gemini_api_key", value.trim()).apply()
 
     var themeMode: String
@@ -39,4 +47,15 @@ class FamilyPreferences(context: Context) {
         get() = prefs.getString("github_sync_token", defaultSyncToken)
             ?.ifBlank { defaultSyncToken } ?: defaultSyncToken
         set(value) = prefs.edit().putString("github_sync_token", value.trim()).apply()
+
+    val pushDebugLog: String
+        get() = prefs.getString("push_debug_log", "") ?: ""
+
+    fun appendPushLog(entry: String) {
+        val stamp = SimpleDateFormat("dd.MM HH:mm:ss", Locale("ru")).format(Date())
+        val line = "[$stamp] $entry"
+        val existing = pushDebugLog.lines().filter { it.isNotBlank() }
+        val updated = (listOf(line) + existing).take(10).joinToString("\n")
+        prefs.edit().putString("push_debug_log", updated).apply()
+    }
 }

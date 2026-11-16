@@ -1,8 +1,13 @@
 package ru.pokanevich.familybudget
 
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
+import android.service.notification.NotificationListenerService
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -87,6 +92,7 @@ import ru.pokanevich.familybudget.data.ExpenseEntity
 import ru.pokanevich.familybudget.data.MoneyManagerImporter
 import ru.pokanevich.familybudget.data.SyncState
 import ru.pokanevich.familybudget.scanner.QrScannerDialog
+import ru.pokanevich.familybudget.service.BankPushListenerService
 import ru.pokanevich.familybudget.service.BankPushParser
 import ru.pokanevich.familybudget.ui.components.AiAnalyticsPane
 import ru.pokanevich.familybudget.ui.components.ExpensesFeedPane
@@ -203,22 +209,49 @@ fun FamilyBudgetApp(
 
     var selectedTab by remember { mutableIntStateOf(0) }
 
+    val checkBatteryUnrestricted = {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        pm?.isIgnoringBatteryOptimizations(context.packageName) ?: true
+    }
+
     var isPushAccessGranted by remember {
         mutableStateOf(
             NotificationManagerCompat.getEnabledListenerPackages(context)
                 .contains(context.packageName)
         )
     }
+    var isBatteryUnrestricted by remember { mutableStateOf(checkBatteryUnrestricted()) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                isPushAccessGranted = NotificationManagerCompat.getEnabledListenerPackages(context)
+                val granted = NotificationManagerCompat.getEnabledListenerPackages(context)
                     .contains(context.packageName)
+                isPushAccessGranted = granted
+                isBatteryUnrestricted = checkBatteryUnrestricted()
+                if (granted) {
+                    runCatching {
+                        NotificationListenerService.requestRebind(
+                            ComponentName(context, BankPushListenerService::class.java)
+                        )
+                    }
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val openBatteryExemption: () -> Unit = {
+        runCatching {
+            context.startActivity(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:${context.packageName}")
+                }
+            )
+        }.onFailure {
+            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        }
     }
 
     val aiReport = remember(confirmedExpenses, monthlyBudgetRub, periodWindow) {
@@ -390,6 +423,7 @@ fun FamilyBudgetApp(
                         window = periodWindow,
                         showHeroInline = false,
                         isPushAccessGranted = isPushAccessGranted,
+                        isBatteryUnrestricted = isBatteryUnrestricted,
                         onSelectPeriod = { selectedPeriod = it },
                         onPrevPeriod = { stepPeriod(-1) },
                         onNextPeriod = { stepPeriod(1) },
@@ -397,6 +431,7 @@ fun FamilyBudgetApp(
                         onOpenPushSettings = {
                             context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                         },
+                        onRequestBatteryExemption = openBatteryExemption,
                         onConfirmPending = { exp, cat ->
                             scope.launch { repository.confirmPendingExpense(exp, cat) }
                         },
@@ -448,6 +483,7 @@ fun FamilyBudgetApp(
                         window = periodWindow,
                         showHeroInline = true,
                         isPushAccessGranted = isPushAccessGranted,
+                        isBatteryUnrestricted = isBatteryUnrestricted,
                         onSelectPeriod = { selectedPeriod = it },
                         onPrevPeriod = { stepPeriod(-1) },
                         onNextPeriod = { stepPeriod(1) },
@@ -455,6 +491,7 @@ fun FamilyBudgetApp(
                         onOpenPushSettings = {
                             context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                         },
+                        onRequestBatteryExemption = openBatteryExemption,
                         onConfirmPending = { exp, cat ->
                             scope.launch { repository.confirmPendingExpense(exp, cat) }
                         },
@@ -587,11 +624,14 @@ fun FamilyBudgetApp(
             themeMode = themeMode,
             syncState = syncState,
             isPushAccessGranted = isPushAccessGranted,
+            isBatteryUnrestricted = isBatteryUnrestricted,
+            pushDebugLog = repository.prefs.pushDebugLog,
             isImportingBackup = isImportingBackup,
             importStatusMessage = importStatusMessage,
             onOpenPushSettings = {
                 context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             },
+            onRequestBatteryExemption = openBatteryExemption,
             onSimulateTestPush = {
                 val sample = BankPushParser.parseNotification(
                     packageName = "ru.sberbankmobile",

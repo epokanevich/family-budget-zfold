@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.BatterySaver
 import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Sync
@@ -73,9 +74,12 @@ fun FamilySettingsSheet(
     themeMode: AppThemeMode,
     syncState: SyncState,
     isPushAccessGranted: Boolean,
+    isBatteryUnrestricted: Boolean,
+    pushDebugLog: String,
     isImportingBackup: Boolean,
     importStatusMessage: String?,
     onOpenPushSettings: () -> Unit,
+    onRequestBatteryExemption: () -> Unit,
     onSimulateTestPush: () -> Unit,
     onImportBackupUri: (Uri) -> Unit,
     onSyncNow: () -> Unit,
@@ -279,6 +283,41 @@ fun FamilySettingsSheet(
                         text = if (isPushAccessGranted) "Доступ к уведомлениям включён ✓" else "Включить доступ к уведомлениям",
                         color = if (isPushAccessGranted) palette.accentEmerald else palette.accentBlue,
                         fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onRequestBatteryExemption,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(
+                        width = 1.dp,
+                        color = if (isBatteryUnrestricted) palette.accentEmerald else palette.accentAmber
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.BatterySaver,
+                        contentDescription = null,
+                        tint = if (isBatteryUnrestricted) palette.accentEmerald else palette.accentAmber,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (isBatteryUnrestricted) {
+                            "Фоновая работа без ограничений ✓"
+                        } else {
+                            "Разрешить работу в фоне (батарея)"
+                        },
+                        color = if (isBatteryUnrestricted) palette.accentEmerald else palette.accentAmber,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                if (pushDebugLog.isNotBlank()) {
+                    Text(
+                        text = "Последние события пушей:\n$pushDebugLog",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textMuted
                     )
                 }
 

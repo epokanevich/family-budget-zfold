@@ -59,7 +59,31 @@ data class AiBudgetReport(
     val incomeBreakdown: List<IncomeCategoryBreakdown>
 )
 
+data class CloudAiAdvice(
+    val text: String,
+    val modelUsed: String,
+    val attemptsCount: Int
+)
+
 object AiBudgetAdvisor {
+
+    private val PRIORITIZED_FREE_MODELS = listOf(
+        "gemini-flash-latest",
+        "gemini-flash-lite-latest",
+        "gemini-3.5-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.6-flash",
+        "gemini-3.8-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-3.7-flash"
+    )
+
+    private val EXCLUDED_MODEL_TOKENS = listOf(
+        "tts", "image", "lyria", "banana", "transcribe", "robotics",
+        "computer-use", "deep-research", "antigravity", "embedding"
+    )
 
     fun buildInstantLocalReport(
         expenses: List<ExpenseEntity>,
@@ -214,8 +238,11 @@ object AiBudgetAdvisor {
     suspend fun fetchDeepCloudAiAdvice(
         apiKey: String,
         report: AiBudgetReport
-    ): Result<String> = withContext(Dispatchers.IO) {
+    ): Result<CloudAiAdvice> = withContext(Dispatchers.IO) {
         runCatching {
+            val cleanKey = apiKey.trim()
+            if (cleanKey.isBlank()) throw IllegalStateException("Не задан API-ключ Gemini")
+
             val summaryLines = report.allCategories
                 .filter { it.spentRub > 0.0 }
                 .joinToString("\n") {
@@ -234,39 +261,132 @@ object AiBudgetAdvisor {
                 "2) В каких категориях есть запас и на что приятное пара может спокойно потратиться."
             ).joinToString("\n")
 
-            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-                connectTimeout = 12000
-                readTimeout = 15000
-                doOutput = true
-            }
-
             val bodyJson = JSONObject().apply {
                 put("contents", JSONArray().put(
                     JSONObject().put("parts", JSONArray().put(
                         JSONObject().put("text", prompt)
                     ))
                 ))
+            }.toString()
+
+            val triedModels = linkedSetOf<String>()
+            var attempts = 0
+            var lastError = "Не удалось получить ответ ни от одной модели"
+
+            // 1. Сначала перебираем приоритетные бесплатные быстрые модели
+            for (model in PRIORITIZED_FREE_MODELS) {
+                triedModels.add(model)
+                attempts++
+                val attemptResult = callGeminiModel(cleanKey, model, bodyJson)
+                if (attemptResult.isSuccess) {
+                    return@runCatching CloudAiAdvice(
+                        text = attemptResult.getOrThrow(),
+                        modelUsed = model,
+                        attemptsCount = attempts
+                    )
+                }
+                lastError = "$model: ${attemptResult.exceptionOrNull()?.message}"
             }
 
-            OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
-                writer.write(bodyJson.toString())
+            // 2. Если все приоритетные перегружены/недоступны — динамически запрашиваем полный список моделей API и перебираем все текстовые
+            val discoveredModels = fetchAvailableTextModels(cleanKey)
+                .filter { it !in triedModels }
+
+            for (model in discoveredModels) {
+                triedModels.add(model)
+                attempts++
+                val attemptResult = callGeminiModel(cleanKey, model, bodyJson)
+                if (attemptResult.isSuccess) {
+                    return@runCatching CloudAiAdvice(
+                        text = attemptResult.getOrThrow(),
+                        modelUsed = model,
+                        attemptsCount = attempts
+                    )
+                }
+                lastError = "$model: ${attemptResult.exceptionOrNull()?.message}"
             }
 
-            val responseText = if (conn.responseCode in 200..299) {
-                conn.inputStream.bufferedReader().readText()
-            } else {
-                val err = conn.errorStream?.bufferedReader()?.readText().orEmpty()
-                throw IllegalStateException("HTTP ${conn.responseCode}: $err")
-            }
-
-            val root = JSONObject(responseText)
-            val candidates = root.getJSONArray("candidates")
-            val content = candidates.getJSONObject(0).getJSONObject("content")
-            val parts = content.getJSONArray("parts")
-            parts.getJSONObject(0).getString("text").trim()
+            throw IllegalStateException("Перебрано моделей: $attempts. Последняя ошибка: $lastError")
         }
+    }
+
+    private fun callGeminiModel(apiKey: String, model: String, bodyJson: String): Result<String> {
+        return runCatching {
+            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                connectTimeout = 10_000
+                readTimeout = 20_000
+                doOutput = true
+            }
+            try {
+                OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
+                    writer.write(bodyJson)
+                }
+                val code = conn.responseCode
+                val responseText = if (code in 200..299) {
+                    conn.inputStream.bufferedReader().readText()
+                } else {
+                    val err = conn.errorStream?.bufferedReader()?.readText().orEmpty()
+                    throw IllegalStateException("HTTP $code ${err.take(120)}")
+                }
+                val root = JSONObject(responseText)
+                val candidates = root.getJSONArray("candidates")
+                val content = candidates.getJSONObject(0).getJSONObject("content")
+                val parts = content.getJSONArray("parts")
+                val text = parts.getJSONObject(0).getString("text").trim()
+                if (text.isBlank()) throw IllegalStateException("Пустой ответ")
+                text
+            } finally {
+                conn.disconnect()
+            }
+        }
+    }
+
+    private fun fetchAvailableTextModels(apiKey: String): List<String> {
+        return runCatching {
+            val url = URL("https://generativelanguage.googleapis.com/v1beta/models?key=$apiKey")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 10_000
+                readTimeout = 12_000
+            }
+            try {
+                if (conn.responseCode !in 200..299) return@runCatching emptyList()
+                val json = JSONObject(conn.inputStream.bufferedReader().readText())
+                val arr = json.optJSONArray("models") ?: return@runCatching emptyList()
+                val list = mutableListOf<String>()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val rawName = obj.optString("name", "").removePrefix("models/")
+                    if (rawName.isBlank()) continue
+                    val methods = obj.optJSONArray("supportedGenerationMethods") ?: continue
+                    var supportsGen = false
+                    for (j in 0 until methods.length()) {
+                        if (methods.optString(j) == "generateContent") {
+                            supportsGen = true
+                            break
+                        }
+                    }
+                    if (!supportsGen) continue
+                    val lower = rawName.lowercase()
+                    if (EXCLUDED_MODEL_TOKENS.any { lower.contains(it) }) continue
+                    list.add(rawName)
+                }
+                // Сортируем: flash-lite -> flash -> остальные
+                list.sortedBy { name ->
+                    val l = name.lowercase()
+                    when {
+                        l.contains("flash-lite") -> 0
+                        l.contains("flash") -> 1
+                        l.contains("gemini") -> 2
+                        else -> 3
+                    }
+                }
+            } finally {
+                conn.disconnect()
+            }
+        }.getOrDefault(emptyList())
     }
 }

@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.BatterySaver
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material3.Button
@@ -106,6 +107,72 @@ fun PushPermissionBanner(
                 )
             ) {
                 Text("Включить", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+@Composable
+fun BatteryExemptionBanner(
+    onRequestBatteryExemption: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalFamilyPalette.current
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = palette.surfaceCard,
+        border = BorderStroke(1.dp, palette.accentAmber.copy(alpha = 0.35f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(palette.accentAmberSoft),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.BatterySaver,
+                    contentDescription = null,
+                    tint = palette.accentAmber,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = "Работа пушей в фоне (когда закрыто)",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = palette.textPrimary
+                )
+                Text(
+                    text = "Разрешите работу без ограничений батареи, чтобы Samsung не усыплял перехват Сбера.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.textSecondary
+                )
+            }
+
+            Button(
+                onClick = onRequestBatteryExemption,
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = palette.accentAmber,
+                    contentColor = Color.White
+                )
+            ) {
+                Text("Разрешить", style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
             }
         }
     }
