@@ -37,9 +37,14 @@ object MoneyManagerImporter {
                     ?: throw IllegalStateException("Не удалось открыть выбранный файл")
 
                 input.use { rawStream ->
-                    // Читаем первые 64 байта, чтобы пропустить заголовок (8x 0x08) до сигнатуры ZIP (PK\x03\x04)
+                    // Читаем первые 64 байта в цикле, чтобы пропустить заголовок (8x 0x08) до сигнатуры ZIP (PK\x03\x04)
                     val headerBuf = ByteArray(64)
-                    val headerLen = rawStream.read(headerBuf)
+                    var headerLen = 0
+                    while (headerLen < headerBuf.size) {
+                        val read = rawStream.read(headerBuf, headerLen, headerBuf.size - headerLen)
+                        if (read <= 0) break
+                        headerLen += read
+                    }
                     if (headerLen < 4) throw IllegalStateException("Файл повреждён или пуст")
 
                     var zipOffset = -1

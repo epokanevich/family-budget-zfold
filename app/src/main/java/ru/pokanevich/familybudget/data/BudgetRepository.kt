@@ -90,7 +90,7 @@ class BudgetRepository private constructor(context: Context) {
                         cachedRemoteMap = emptyMap()
                     }
 
-                    val filePath = "families/$familyCode/expenses.json"
+                    val filePath = "families/$familyCode/budget_v3.json"
                     val apiUrl = "https://api.github.com/repos/epokanevich/family-budget-sync-db/contents/$filePath"
 
                     var remoteSha: String? = null
@@ -123,6 +123,7 @@ class BudgetRepository private constructor(context: Context) {
                         val body = getConn.inputStream.bufferedReader().readText()
                         val fileObj = JSONObject(body)
                         remoteSha = fileObj.optString("sha", "").ifBlank { null }
+                        val remoteSize = fileObj.optInt("size", 0)
                         var contentB64 = fileObj.optString("content", "")
                             .replace("\n", "")
                             .replace("\r", "")
@@ -157,6 +158,11 @@ class BudgetRepository private constructor(context: Context) {
                                 val parsed = ExpenseEntity.fromJsonObject(itemObj) ?: continue
                                 remoteMap[parsed.id] = parsed
                             }
+                        }
+
+                        // Защита от случайной перезаписи непустой облачной базы при сбое чтения
+                        if (remoteSize > 5 && remoteMap.isEmpty()) {
+                            throw IllegalStateException("Sync guard: remote size $remoteSize decoded 0 items")
                         }
 
                         cachedEtag = getConn.getHeaderField("ETag")

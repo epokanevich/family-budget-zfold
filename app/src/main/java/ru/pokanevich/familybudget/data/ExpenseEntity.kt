@@ -38,14 +38,14 @@ data class ExpenseEntity(
         put("amountRub", amountRub)
         put("merchant", merchant)
         put("categoryName", categoryName)
-        put("authorName", authorName)
-        put("sourceType", sourceType)
-        put("isPendingConfirmation", isPendingConfirmation)
-        put("isDeleted", isDeleted)
+        if (authorName != "Евгений") put("authorName", authorName)
+        if (sourceType != "MANUAL") put("sourceType", sourceType)
+        if (isPendingConfirmation) put("isPendingConfirmation", true)
+        if (isDeleted) put("isDeleted", true)
         put("createdAtEpochMs", createdAtEpochMs)
-        put("updatedAtEpochMs", updatedAtEpochMs)
-        put("rawPushOrQrText", rawPushOrQrText)
-        put("dedupSignature", dedupSignature)
+        if (updatedAtEpochMs != createdAtEpochMs) put("updatedAtEpochMs", updatedAtEpochMs)
+        if (rawPushOrQrText.isNotEmpty()) put("rawPushOrQrText", rawPushOrQrText)
+        if (dedupSignature.isNotEmpty()) put("dedupSignature", dedupSignature)
     }
 
     companion object {
