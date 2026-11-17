@@ -99,4 +99,8 @@ dependencies {
     // Coroutines & Network for Cloud Sync & Gemini Free Tier AI Advisor
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.0")
+
+    // Unit Testing
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
