@@ -47,7 +47,7 @@ class MonthlyTrendCalculatorTest {
             ExpenseEntity(
                 id = "e-jan",
                 amountRub = 30_000.0,
-                categoryName = ExpenseCategory.RESTAURANTS.name,
+                categoryName = ExpenseCategory.CAFES.name,
                 createdAtEpochMs = epochAt(2026, 1, 5)
             ),
             // Out of 6-month window (2025-08 is before 2025-09)
