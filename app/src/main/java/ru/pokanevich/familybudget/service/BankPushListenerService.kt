@@ -15,11 +15,37 @@ class BankPushListenerService : NotificationListenerService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    companion object {
+        private const val STALE_NOTIFICATION_MS = 2 * 60 * 1000L
+        private const val MAX_PROCESSED_KEYS = 500
+        private val processedNotificationKeys = LinkedHashSet<String>()
+
+        private fun markNotificationProcessedIfNew(dedupKey: String): Boolean {
+            synchronized(processedNotificationKeys) {
+                if (!processedNotificationKeys.add(dedupKey)) {
+                    return false
+                }
+                if (processedNotificationKeys.size > MAX_PROCESSED_KEYS) {
+                    val iterator = processedNotificationKeys.iterator()
+                    if (iterator.hasNext()) {
+                        iterator.next()
+                        iterator.remove()
+                    }
+                }
+                return true
+            }
+        }
+    }
+
     override fun onListenerConnected() {
         super.onListenerConnected()
         runCatching {
             FamilyPreferences(applicationContext).appendPushLog("Сервис перехвата пушей подключён системой")
+            val now = System.currentTimeMillis()
             activeNotifications?.forEach { sbn ->
+                if (sbn.postTime > 0L && now - sbn.postTime > STALE_NOTIFICATION_MS) {
+                    return@forEach
+                }
                 processStatusBarNotification(sbn)
             }
         }
@@ -47,6 +73,9 @@ class BankPushListenerService : NotificationListenerService() {
 
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
         if (!BankPushParser.isPackageEligible(packageName, title)) return
+
+        val dedupKey = "${sbn.key ?: "$packageName:${sbn.id}"}|${sbn.postTime}"
+        if (!markNotificationProcessedIfNew(dedupKey)) return
 
         val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
             ?.takeIf { it.isNotBlank() }
