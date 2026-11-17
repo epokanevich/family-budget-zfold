@@ -8,10 +8,10 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
-import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.fragment.app.FragmentActivity
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -71,6 +71,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,6 +86,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.launch
 import ru.pokanevich.familybudget.ai.AiBudgetAdvisor
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -93,6 +95,7 @@ import ru.pokanevich.familybudget.data.BankPushSource
 import ru.pokanevich.familybudget.data.BudgetRepository
 import ru.pokanevich.familybudget.data.CsvExporter
 import ru.pokanevich.familybudget.data.FamilyPreferences
+import ru.pokanevich.familybudget.data.PinSecurityManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import ru.pokanevich.familybudget.data.ExpenseEntity
@@ -104,6 +107,7 @@ import ru.pokanevich.familybudget.service.BankPushListenerService
 import ru.pokanevich.familybudget.service.BankPushParser
 import ru.pokanevich.familybudget.ui.components.AiAnalyticsPane
 import ru.pokanevich.familybudget.ui.components.ExpensesFeedPane
+import ru.pokanevich.familybudget.ui.components.PinLockScreen
 import ru.pokanevich.familybudget.ui.sheets.AddEditExpenseSheet
 import ru.pokanevich.familybudget.ui.sheets.CategoriesAndLimitsSheet
 import ru.pokanevich.familybudget.ui.sheets.ExpenseDetailSheet
@@ -117,17 +121,78 @@ import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
 import ru.pokanevich.familybudget.ui.util.BudgetPeriod
 import ru.pokanevich.familybudget.ui.util.PeriodCalculator
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val repository = BudgetRepository.getInstance(applicationContext)
+        val pinManager = PinSecurityManager.getInstance(applicationContext)
+        pinManager.attachToProcessLifecycle(ProcessLifecycleOwner.get().lifecycle)
 
         setContent {
             val windowSizeClass = calculateWindowSizeClass(this)
             val isUnfoldedFoldable = windowSizeClass.widthSizeClass != WindowWidthSizeClass.Compact
+            val context = LocalContext.current
+            val lifecycleOwner = LocalLifecycleOwner.current
+
+            val isLocked by pinManager.isLocked.collectAsState()
+            val isBiometricEnabled by pinManager.isBiometricEnabled.collectAsState()
+            val lockSessionId by pinManager.lockSessionId.collectAsState()
+
+            var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+            var selectedPeriodName by rememberSaveable { mutableStateOf(BudgetPeriod.MONTH.name) }
+            val selectedPeriod = remember(selectedPeriodName) {
+                runCatching { BudgetPeriod.valueOf(selectedPeriodName) }.getOrDefault(BudgetPeriod.MONTH)
+            }
+            var anchorEpochMs by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
+
+            val checkBatteryUnrestricted = {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                pm?.isIgnoringBatteryOptimizations(context.packageName) ?: true
+            }
+            var isPushAccessGranted by remember {
+                mutableStateOf(
+                    NotificationManagerCompat.getEnabledListenerPackages(context)
+                        .contains(context.packageName)
+                )
+            }
+            var isBatteryUnrestricted by remember { mutableStateOf(checkBatteryUnrestricted()) }
+
+            // Жизненный цикл фонового синка BudgetRepository и переподключения BankPushListenerService
+            // не зависит от блокировки UI экраном PIN.
+            DisposableEffect(lifecycleOwner, repository) {
+                val observer = LifecycleEventObserver { _, event ->
+                    when (event) {
+                        Lifecycle.Event.ON_START -> {
+                            repository.setForegroundActive(true)
+                        }
+                        Lifecycle.Event.ON_RESUME -> {
+                            val granted = NotificationManagerCompat.getEnabledListenerPackages(context)
+                                .contains(context.packageName)
+                            isPushAccessGranted = granted
+                            isBatteryUnrestricted = checkBatteryUnrestricted()
+                            if (granted) {
+                                runCatching {
+                                    NotificationListenerService.requestRebind(
+                                        ComponentName(context, BankPushListenerService::class.java)
+                                    )
+                                }
+                            }
+                        }
+                        Lifecycle.Event.ON_STOP -> {
+                            repository.setForegroundActive(false)
+                        }
+                        else -> Unit
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose {
+                    lifecycleOwner.lifecycle.removeObserver(observer)
+                    repository.setForegroundActive(false)
+                }
+            }
 
             var themeMode by remember {
                 mutableStateOf(AppThemeMode.fromPref(repository.prefs.themeMode))
@@ -160,15 +225,32 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = LocalFamilyPalette.current.background
                 ) {
-                    FamilyBudgetApp(
-                        repository = repository,
-                        isUnfoldedFoldable = isUnfoldedFoldable,
-                        themeMode = themeMode,
-                        onThemeModeChange = { newMode ->
-                            themeMode = newMode
-                            repository.prefs.themeMode = newMode.prefKey
-                        }
-                    )
+                    if (isLocked) {
+                        PinLockScreen(
+                            pinManager = pinManager,
+                            isBiometricEnabled = isBiometricEnabled,
+                            lockSessionId = lockSessionId
+                        )
+                    } else {
+                        FamilyBudgetApp(
+                            repository = repository,
+                            pinManager = pinManager,
+                            isUnfoldedFoldable = isUnfoldedFoldable,
+                            themeMode = themeMode,
+                            onThemeModeChange = { newMode ->
+                                themeMode = newMode
+                                repository.prefs.themeMode = newMode.prefKey
+                            },
+                            isPushAccessGranted = isPushAccessGranted,
+                            isBatteryUnrestricted = isBatteryUnrestricted,
+                            selectedTab = selectedTab,
+                            onSelectedTabChange = { selectedTab = it },
+                            selectedPeriod = selectedPeriod,
+                            onSelectedPeriodChange = { selectedPeriodName = it.name },
+                            anchorEpochMs = anchorEpochMs,
+                            onAnchorEpochMsChange = { anchorEpochMs = it }
+                        )
+                    }
                 }
             }
         }
@@ -179,13 +261,21 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun FamilyBudgetApp(
     repository: BudgetRepository,
+    pinManager: PinSecurityManager,
     isUnfoldedFoldable: Boolean,
     themeMode: AppThemeMode,
-    onThemeModeChange: (AppThemeMode) -> Unit
+    onThemeModeChange: (AppThemeMode) -> Unit,
+    isPushAccessGranted: Boolean,
+    isBatteryUnrestricted: Boolean,
+    selectedTab: Int,
+    onSelectedTabChange: (Int) -> Unit,
+    selectedPeriod: BudgetPeriod,
+    onSelectedPeriodChange: (BudgetPeriod) -> Unit,
+    anchorEpochMs: Long,
+    onAnchorEpochMsChange: (Long) -> Unit
 ) {
     val palette = LocalFamilyPalette.current
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -197,6 +287,9 @@ fun FamilyBudgetApp(
     val categoryRegistry by repository.categoryRegistry.collectAsState()
     val recurringPayments by repository.recurringPayments.collectAsState(initial = emptyList())
     val savingsGoals by repository.savingsGoals.collectAsState(initial = emptyList())
+    val isAppLockEnabled by pinManager.isAppLockEnabled.collectAsState()
+    val isBiometricEnabled by pinManager.isBiometricEnabled.collectAsState()
+    val autoLockTimeoutMs by pinManager.autoLockTimeoutMs.collectAsState()
 
     var currentUserName by remember { mutableStateOf(repository.prefs.currentUserName) }
     var familySpaceCode by remember { mutableStateOf(repository.prefs.familySpaceCode) }
@@ -205,9 +298,6 @@ fun FamilyBudgetApp(
     var enabledBankSources by remember { mutableStateOf(repository.prefs.enabledBankPushSources) }
     var geminiApiKey by remember { mutableStateOf(repository.prefs.geminiApiKey) }
 
-    // Period & Date navigation state
-    var selectedPeriod by remember { mutableStateOf(BudgetPeriod.MONTH) }
-    var anchorEpochMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val periodWindow = remember(selectedPeriod, anchorEpochMs) {
         PeriodCalculator.buildWindow(selectedPeriod, anchorEpochMs)
     }
@@ -257,53 +347,6 @@ fun FamilyBudgetApp(
         }
     }
 
-    var selectedTab by remember { mutableIntStateOf(0) }
-
-    val checkBatteryUnrestricted = {
-        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-        pm?.isIgnoringBatteryOptimizations(context.packageName) ?: true
-    }
-
-    var isPushAccessGranted by remember {
-        mutableStateOf(
-            NotificationManagerCompat.getEnabledListenerPackages(context)
-                .contains(context.packageName)
-        )
-    }
-    var isBatteryUnrestricted by remember { mutableStateOf(checkBatteryUnrestricted()) }
-
-    DisposableEffect(lifecycleOwner, repository) {
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_START -> {
-                    repository.setForegroundActive(true)
-                }
-                Lifecycle.Event.ON_RESUME -> {
-                    val granted = NotificationManagerCompat.getEnabledListenerPackages(context)
-                        .contains(context.packageName)
-                    isPushAccessGranted = granted
-                    isBatteryUnrestricted = checkBatteryUnrestricted()
-                    if (granted) {
-                        runCatching {
-                            NotificationListenerService.requestRebind(
-                                ComponentName(context, BankPushListenerService::class.java)
-                            )
-                        }
-                    }
-                }
-                Lifecycle.Event.ON_STOP -> {
-                    repository.setForegroundActive(false)
-                }
-                else -> Unit
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            repository.setForegroundActive(false)
-        }
-    }
-
     val openBatteryExemption: () -> Unit = {
         runCatching {
             context.startActivity(
@@ -339,10 +382,10 @@ fun FamilyBudgetApp(
     }
 
     val stepPeriod: (Int) -> Unit = { delta ->
-        anchorEpochMs = PeriodCalculator.stepAnchor(selectedPeriod, anchorEpochMs, delta)
+        onAnchorEpochMsChange(PeriodCalculator.stepAnchor(selectedPeriod, anchorEpochMs, delta))
     }
     val jumpToCurrent: () -> Unit = {
-        anchorEpochMs = System.currentTimeMillis()
+        onAnchorEpochMsChange(System.currentTimeMillis())
     }
 
     Scaffold(
@@ -439,7 +482,7 @@ fun FamilyBudgetApp(
                     ) {
                         NavigationBarItem(
                             selected = selectedTab == 0,
-                            onClick = { selectedTab = 0 },
+                            onClick = { onSelectedTabChange(0) },
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = palette.accentEmerald,
                                 selectedTextColor = palette.accentEmerald,
@@ -462,7 +505,7 @@ fun FamilyBudgetApp(
                         )
                         NavigationBarItem(
                             selected = selectedTab == 1,
-                            onClick = { selectedTab = 1 },
+                            onClick = { onSelectedTabChange(1) },
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = palette.accentEmerald,
                                 selectedTextColor = palette.accentEmerald,
@@ -500,7 +543,7 @@ fun FamilyBudgetApp(
                         showHeroInline = false,
                         isPushAccessGranted = isPushAccessGranted,
                         isBatteryUnrestricted = isBatteryUnrestricted,
-                        onSelectPeriod = { selectedPeriod = it },
+                        onSelectPeriod = onSelectedPeriodChange,
                         onPrevPeriod = { stepPeriod(-1) },
                         onNextPeriod = { stepPeriod(1) },
                         onJumpToCurrent = jumpToCurrent,
@@ -536,7 +579,7 @@ fun FamilyBudgetApp(
                         window = periodWindow,
                         showPeriodSwitcher = false,
                         showHeroAtTop = true,
-                        onSelectPeriod = { selectedPeriod = it },
+                        onSelectPeriod = onSelectedPeriodChange,
                         onPrevPeriod = { stepPeriod(-1) },
                         onNextPeriod = { stepPeriod(1) },
                         onJumpToCurrent = jumpToCurrent,
@@ -583,7 +626,7 @@ fun FamilyBudgetApp(
                         showHeroInline = true,
                         isPushAccessGranted = isPushAccessGranted,
                         isBatteryUnrestricted = isBatteryUnrestricted,
-                        onSelectPeriod = { selectedPeriod = it },
+                        onSelectPeriod = onSelectedPeriodChange,
                         onPrevPeriod = { stepPeriod(-1) },
                         onNextPeriod = { stepPeriod(1) },
                         onJumpToCurrent = jumpToCurrent,
@@ -613,7 +656,7 @@ fun FamilyBudgetApp(
                         window = periodWindow,
                         showPeriodSwitcher = true,
                         showHeroAtTop = true,
-                        onSelectPeriod = { selectedPeriod = it },
+                        onSelectPeriod = onSelectedPeriodChange,
                         onPrevPeriod = { stepPeriod(-1) },
                         onNextPeriod = { stepPeriod(1) },
                         onJumpToCurrent = jumpToCurrent,
@@ -777,6 +820,31 @@ fun FamilyBudgetApp(
             pushDebugLog = repository.prefs.pushDebugLog,
             isImportingBackup = isImportingBackup,
             importStatusMessage = importStatusMessage,
+            isAppLockEnabled = isAppLockEnabled,
+            isBiometricEnabled = isBiometricEnabled,
+            autoLockTimeoutMs = autoLockTimeoutMs,
+            onVerifyCurrentPin = { pin -> pinManager.verifyPin(pin) },
+            onSetOrChangePin = { newPin ->
+                val wasEnabled = isAppLockEnabled
+                pinManager.setPin(newPin)
+                scope.launch {
+                    snackbarHostState.showSnackbar(
+                        message = if (wasEnabled) "PIN-код обновлён" else "Вход по PIN-коду включён",
+                        duration = SnackbarDuration.Short
+                    )
+                }
+            },
+            onDisableAppLock = {
+                pinManager.disableAppLock()
+                scope.launch {
+                    snackbarHostState.showSnackbar(
+                        message = "Защита PIN-кодом отключена",
+                        duration = SnackbarDuration.Short
+                    )
+                }
+            },
+            onToggleBiometric = { enabled -> pinManager.setBiometricEnabled(enabled) },
+            onChangeAutoLockTimeout = { timeoutMs -> pinManager.setAutoLockTimeoutMs(timeoutMs) },
             onExportCsvCurrentPeriod = {
                 val periodExpenses = confirmedExpenses.filter {
                     it.createdAtEpochMs in periodWindow.startMs..periodWindow.endMs

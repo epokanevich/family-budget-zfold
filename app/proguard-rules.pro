@@ -22,3 +22,8 @@
 -keep class androidx.camera.** { *; }
 -keepclassmembers class androidx.camera.** { *; }
 -dontwarn androidx.camera.**
+
+# BiometricPrompt (FragmentActivity / BiometricFragment / BiometricViewModel)
+-keep class androidx.biometric.** { *; }
+-keepclassmembers class androidx.biometric.** { *; }
+-dontwarn androidx.biometric.**

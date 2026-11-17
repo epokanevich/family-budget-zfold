@@ -100,7 +100,7 @@ enum class BankPushSource(
     }
 }
 
-class FamilyPreferences(context: Context) {
+class FamilyPreferences(context: Context) : PinLockStorage {
     private val prefs: SharedPreferences =
         context.applicationContext.getSharedPreferences("family_budget_prefs", Context.MODE_PRIVATE)
 
@@ -269,6 +269,41 @@ class FamilyPreferences(context: Context) {
             prefs.edit().putString(KEY_RECENT_PUSH_DEDUP_KEYS, serialized).apply()
         }
 
+    /**
+     * Локальные настройки защиты приложения PIN-кодом и биометрией.
+     * Строго локальные — НЕ синхронизируются в облачный config_v1.json / budget_v3.json.
+     */
+    override var isAppLockEnabled: Boolean
+        get() = runCatching { prefs.getBoolean(KEY_APP_LOCK_ENABLED, false) }.getOrDefault(false)
+        set(value) = prefs.edit().putBoolean(KEY_APP_LOCK_ENABLED, value).apply()
+
+    override var isBiometricEnabled: Boolean
+        get() = runCatching { prefs.getBoolean(KEY_BIOMETRIC_ENABLED, false) }.getOrDefault(false)
+        set(value) = prefs.edit().putBoolean(KEY_BIOMETRIC_ENABLED, value).apply()
+
+    override var pinSaltHex: String
+        get() = safeGetString(KEY_PIN_SALT_HEX, "")
+        set(value) = prefs.edit().putString(KEY_PIN_SALT_HEX, value).apply()
+
+    override var pinHashHex: String
+        get() = safeGetString(KEY_PIN_HASH_HEX, "")
+        set(value) = prefs.edit().putString(KEY_PIN_HASH_HEX, value).apply()
+
+    override var pinAutoLockTimeoutMs: Long
+        get() = runCatching {
+            prefs.getLong(KEY_PIN_AUTO_LOCK_TIMEOUT_MS, PinSecurityManager.DEFAULT_AUTO_LOCK_TIMEOUT_MS)
+        }.getOrDefault(PinSecurityManager.DEFAULT_AUTO_LOCK_TIMEOUT_MS).coerceAtLeast(0L)
+        set(value) = prefs.edit().putLong(KEY_PIN_AUTO_LOCK_TIMEOUT_MS, value.coerceAtLeast(0L)).apply()
+
+    override fun clearPinCredentials() {
+        prefs.edit()
+            .putBoolean(KEY_APP_LOCK_ENABLED, false)
+            .putBoolean(KEY_BIOMETRIC_ENABLED, false)
+            .remove(KEY_PIN_SALT_HEX)
+            .remove(KEY_PIN_HASH_HEX)
+            .apply()
+    }
+
     companion object {
         const val MAX_PERSISTED_PUSH_DEDUP_KEYS = 50
         private const val KEY_GEMINI_CLEARED = "gemini_api_key_cleared"
@@ -277,6 +312,11 @@ class FamilyPreferences(context: Context) {
         private const val KEY_FAMILY_CONFIG_JSON = "family_config_v1_json"
         private const val KEY_HAS_UNSYNCED_CONFIG = "has_unsynced_config"
         private const val KEY_SYNCED_CONFIG_FAMILIES = "synced_config_families"
+        private const val KEY_APP_LOCK_ENABLED = "pin_app_lock_enabled"
+        private const val KEY_BIOMETRIC_ENABLED = "pin_biometric_enabled"
+        private const val KEY_PIN_SALT_HEX = "pin_salt_hex"
+        private const val KEY_PIN_HASH_HEX = "pin_hash_hex"
+        private const val KEY_PIN_AUTO_LOCK_TIMEOUT_MS = "pin_auto_lock_timeout_ms"
 
         fun normalizeFamilyCode(raw: String): String =
             raw.trim().ifBlank { "POKANE-FAMILY" }.replace(Regex("[^A-Za-z0-9_-]"), "_")

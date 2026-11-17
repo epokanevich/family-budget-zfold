@@ -31,8 +31,8 @@ android {
         applicationId = "ru.pokanevich.familybudget"
         minSdk = 26
         targetSdk = 34
-        versionCode = 23
-        versionName = "3.6.1"
+        versionCode = 24
+        versionName = "3.7.0"
 
         val syncToken = escapeForBuildConfig(System.getenv("SYNC_GITHUB_TOKEN"))
         val geminiApiKey = escapeForBuildConfig(System.getenv("GEMINI_API_KEY"))
@@ -120,7 +120,10 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-process:2.7.0")
     implementation("androidx.activity:activity-compose:1.9.0")
+    implementation("androidx.fragment:fragment-ktx:1.7.1")
+    implementation("androidx.biometric:biometric:1.1.0")
 
     // UI & Material 3 Adaptive for Samsung Galaxy Z Fold 4/5
     implementation("androidx.compose.ui:ui")
