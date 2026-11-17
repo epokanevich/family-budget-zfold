@@ -9,7 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,12 +18,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 
 enum class SyncState(val label: String) {
     OFFLINE_READY("Локальная БД активна (офлайн)"),
@@ -52,6 +54,12 @@ internal data class SyncMergePlan(
     val dedupedLosers: List<ExpenseEntity>
 )
 
+internal data class ConfigSyncMergePlan(
+    val mergedConfig: FamilyConfig,
+    val updateLocal: Boolean,
+    val needCloudPush: Boolean
+)
+
 class BudgetRepository private constructor(context: Context) {
 
     private val db = AppDatabase.getInstance(context)
@@ -60,7 +68,13 @@ class BudgetRepository private constructor(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val syncMutex = Mutex()
     private val ingestMutex = Mutex()
+    private val configLock = Any()
     private var pollingJob: Job? = null
+
+    private val foregroundWakeupSignal = Channel<Unit>(Channel.CONFLATED)
+
+    @Volatile
+    private var isForegroundActive: Boolean = false
 
     /**
      * Coalescing: true, если уже есть поставленный в очередь на [syncMutex] цикл синка
@@ -73,17 +87,41 @@ class BudgetRepository private constructor(context: Context) {
     private var cachedRemoteSha: String? = null
     private var cachedRemoteMap: Map<String, ExpenseEntity> = emptyMap()
 
+    private var cachedConfigEtag: String? = null
+    private var cachedConfigSha: String? = null
+    private var cachedRemoteConfig: FamilyConfig? = null
+
     private val _syncState = MutableStateFlow(SyncState.OFFLINE_READY)
     val syncState: StateFlow<SyncState> = _syncState
 
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing
 
+    private val initialConfig = prefs.loadFamilyConfig()
+    private val _familyConfig = MutableStateFlow(initialConfig)
+    val familyConfig: StateFlow<FamilyConfig> = _familyConfig
+
+    private val _categoryRegistry = MutableStateFlow(initialConfig.toRegistry())
+    val categoryRegistry: StateFlow<CategoryRegistry> = _categoryRegistry
+
     val confirmedExpenses: Flow<List<ExpenseEntity>> = dao.observeConfirmedExpenses()
     val pendingPushExpenses: Flow<List<ExpenseEntity>> = dao.observePendingPushExpenses()
 
     init {
         startRealtimeSync()
+    }
+
+    /**
+     * Переключает частоту фонового поллинга GitHub API в зависимости от жизненного цикла UI:
+     * на активном экране — каждые 15 секунд, в фоне — раз в 3 минуты (при переходе в foreground
+     * цикл пробуждается немедленно).
+     */
+    fun setForegroundActive(active: Boolean) {
+        val previous = isForegroundActive
+        isForegroundActive = active
+        if (active && !previous) {
+            foregroundWakeupSignal.trySend(Unit)
+        }
     }
 
     /**
@@ -96,7 +134,17 @@ class BudgetRepository private constructor(context: Context) {
         pollingJob = scope.launch {
             while (isActive) {
                 syncWithCloudNow()
-                delay(15_000L)
+                while (foregroundWakeupSignal.tryReceive().isSuccess) {
+                    // Сбрасываем сигналы, пришедшие во время уже выполнявшегося цикла синка
+                }
+                val intervalMs = if (isForegroundActive) {
+                    FOREGROUND_POLL_INTERVAL_MS
+                } else {
+                    BACKGROUND_POLL_INTERVAL_MS
+                }
+                withTimeoutOrNull(intervalMs) {
+                    foregroundWakeupSignal.receive()
+                }
             }
         }
     }
@@ -107,7 +155,7 @@ class BudgetRepository private constructor(context: Context) {
 
     /**
      * Запрос синка после локального изменения. Если цикл уже стоит в очереди на [syncMutex],
-     * новый не создаётся: ожидающий цикл всё равно прочитает актуальное состояние Room.
+     * новый не создаётся: ожидающий цикл всё равно прочитает актуальное состояние Room/конфига.
      */
     private fun requestCoalescedSync() {
         if (pendingSyncRequested.compareAndSet(false, true)) {
@@ -117,7 +165,7 @@ class BudgetRepository private constructor(context: Context) {
 
     private suspend fun runSync(onlyIfPending: Boolean) = withContext(Dispatchers.IO) {
         syncMutex.withLock {
-            // Любой цикл, захвативший мьютекс, читает свежее состояние Room — он «закрывает» ожидающий запрос.
+            // Любой цикл, захвативший мьютекс, читает свежее состояние Room и FamilyConfig.
             val wasPending = pendingSyncRequested.getAndSet(false)
             if (onlyIfPending && !wasPending) return@withLock
 
@@ -140,6 +188,75 @@ class BudgetRepository private constructor(context: Context) {
         }
     }
 
+    private fun applyLocalConfigLocked(config: FamilyConfig, hasUnsynced: Boolean) {
+        prefs.saveFamilyConfig(config, hasUnsynced = hasUnsynced)
+        _familyConfig.value = config
+        _categoryRegistry.value = config.toRegistry()
+    }
+
+    /**
+     * Обновляет общий месячный бюджет семьи с новым `budgetUpdatedAtEpochMs`
+     * и ставит синхронизацию в очередь для отправки на второй телефон.
+     */
+    fun updateMonthlyBudget(newBudgetRub: Double) {
+        if (!newBudgetRub.isFinite() || newBudgetRub <= 0.0) return
+        val changed = synchronized(configLock) {
+            val current = _familyConfig.value
+            if (abs(current.monthlyBudgetRub - newBudgetRub) <= 0.001) {
+                return@synchronized false
+            }
+            val now = maxOf(System.currentTimeMillis(), current.budgetUpdatedAtEpochMs + 1L)
+            val updated = current.copy(
+                monthlyBudgetRub = newBudgetRub,
+                budgetUpdatedAtEpochMs = now
+            )
+            applyLocalConfigLocked(updated, hasUnsynced = true)
+            true
+        }
+        if (changed) {
+            requestCoalescedSync()
+        }
+    }
+
+    /**
+     * Добавляет или обновляет категорию в семейном конфиге с монотонным `updatedAtEpochMs`
+     * и ставит синхронизацию в очередь.
+     */
+    fun upsertCategory(descriptor: CategoryDescriptor) {
+        if (descriptor.id.isBlank()) return
+        synchronized(configLock) {
+            val current = _familyConfig.value
+            val existing = current.categories.firstOrNull { it.id == descriptor.id }
+            val nextUpdatedAt = maxOf(
+                System.currentTimeMillis(),
+                (existing?.updatedAtEpochMs ?: 0L) + 1L,
+                descriptor.updatedAtEpochMs
+            )
+            val updatedDescriptor = descriptor.copy(updatedAtEpochMs = nextUpdatedAt)
+            val updatedList = (current.categories.filterNot { it.id == descriptor.id } + updatedDescriptor)
+                .sortedBy { it.id }
+            applyLocalConfigLocked(current.copy(categories = updatedList), hasUnsynced = true)
+        }
+        requestCoalescedSync()
+    }
+
+    private sealed interface GithubFileFetchResult {
+        data object NotModified : GithubFileFetchResult
+        data object NotFound : GithubFileFetchResult
+        data class Loaded(
+            val sha: String?,
+            val size: Int,
+            val etag: String?,
+            val decodedText: String
+        ) : GithubFileFetchResult
+    }
+
+    private class RemoteConfigSnapshot(
+        val sha: String?,
+        val config: FamilyConfig?,
+        val notModified: Boolean
+    )
+
     private class RemoteSnapshot(
         val sha: String?,
         val items: Map<String, ExpenseEntity>,
@@ -150,16 +267,135 @@ class BudgetRepository private constructor(context: Context) {
         val token = prefs.githubSyncToken
         if (token.isBlank()) return SyncState.OFFLINE_READY
 
-        val familyCode = prefs.familySpaceCode.ifBlank { "POKANE-FAMILY" }
-            .replace(Regex("[^A-Za-z0-9_-]"), "_")
+        val familyCode = FamilyPreferences.normalizeFamilyCode(prefs.familySpaceCode)
 
         if (cachedFamilyCode != familyCode) {
             cachedFamilyCode = familyCode
             cachedEtag = null
             cachedRemoteSha = null
             cachedRemoteMap = emptyMap()
+            cachedConfigEtag = null
+            cachedConfigSha = null
+            cachedRemoteConfig = null
         }
 
+        // 1. Строго сначала синхронизируем config_v1.json, чтобы новые кастомные категории
+        // всегда приезжали раньше операций из budget_v3.json.
+        syncConfigCycle(familyCode, token)
+
+        // 2. Затем синхронизируем операции в budget_v3.json.
+        syncExpensesCycle(familyCode, token)
+
+        return SyncState.CLOUD_CONNECTED
+    }
+
+    private fun syncConfigCycle(familyCode: String, token: String) {
+        val filePath = "families/$familyCode/config_v1.json"
+        val apiUrl = "https://api.github.com/repos/epokanevich/family-budget-sync-db/contents/$filePath"
+
+        for (attempt in 0..1) {
+            val remote = fetchRemoteConfigSnapshot(apiUrl, filePath, familyCode, token)
+            val hasUnsyncedBeforeMerge = synchronized(configLock) { prefs.hasUnsyncedConfig }
+
+            if (remote.notModified && !hasUnsyncedBeforeMerge) {
+                return
+            }
+
+            val localNow = synchronized(configLock) { _familyConfig.value }
+            val plan = buildConfigSyncPlan(
+                local = localNow,
+                remote = remote.config,
+                remoteExists = remote.sha != null
+            )
+
+            if (!plan.needCloudPush) {
+                if (remote.sha != null) {
+                    prefs.markConfigSyncedForFamily(familyCode)
+                }
+                val needFollowUp = synchronized(configLock) {
+                    val latest = _familyConfig.value
+                    if (latest.isEquivalentTo(localNow)) {
+                        if (plan.updateLocal || prefs.hasUnsyncedConfig) {
+                            applyLocalConfigLocked(plan.mergedConfig, hasUnsynced = false)
+                        }
+                        false
+                    } else {
+                        val reMerged = FamilyConfig.merge(latest, plan.mergedConfig)
+                        val stillNeedsPush = remote.config == null || !reMerged.isEquivalentTo(remote.config)
+                        applyLocalConfigLocked(reMerged, hasUnsynced = stillNeedsPush)
+                        stillNeedsPush
+                    }
+                }
+                if (needFollowUp) {
+                    requestCoalescedSync()
+                }
+                return
+            }
+
+            val payloadToPush = synchronized(configLock) {
+                val latest = _familyConfig.value
+                val toSave = if (latest.isEquivalentTo(localNow)) {
+                    plan.mergedConfig
+                } else {
+                    FamilyConfig.merge(latest, plan.mergedConfig)
+                }
+                if (!toSave.isEquivalentTo(latest) || !prefs.hasUnsyncedConfig) {
+                    applyLocalConfigLocked(toSave, hasUnsynced = true)
+                }
+                toSave
+            }
+
+            val rawBytes = payloadToPush.toJsonObject().toString().toByteArray(Charsets.UTF_8)
+            val putCode = putRemoteFileBytes(
+                apiUrl = apiUrl,
+                token = token,
+                commitMessage = "Sync family config ($familyCode)",
+                rawBytes = rawBytes,
+                remoteSha = remote.sha
+            ) { newSha ->
+                cachedConfigSha = newSha?.ifBlank { null } ?: remote.sha
+                cachedConfigEtag = null
+                cachedRemoteConfig = payloadToPush
+            }
+
+            when {
+                putCode in 200..299 -> {
+                    prefs.markConfigSyncedForFamily(familyCode)
+                    val needFollowUp = synchronized(configLock) {
+                        val latest = _familyConfig.value
+                        if (latest.isEquivalentTo(payloadToPush)) {
+                            applyLocalConfigLocked(payloadToPush, hasUnsynced = false)
+                            false
+                        } else {
+                            val reMerged = FamilyConfig.merge(latest, payloadToPush)
+                            applyLocalConfigLocked(reMerged, hasUnsynced = true)
+                            true
+                        }
+                    }
+                    if (needFollowUp) {
+                        requestCoalescedSync()
+                    }
+                    return
+                }
+                putCode == HttpURLConnection.HTTP_CONFLICT -> {
+                    cachedConfigEtag = null
+                    cachedConfigSha = null
+                    cachedRemoteConfig = null
+                    if (attempt == 0) {
+                        Log.w("BudgetRepository", "GitHub Config PUT HTTP 409 conflict, retrying sync cycle immediately")
+                        continue
+                    }
+                    throw IllegalStateException("GitHub Config PUT HTTP $putCode")
+                }
+                else -> {
+                    cachedConfigEtag = null
+                    throw IllegalStateException("GitHub Config PUT HTTP $putCode")
+                }
+            }
+        }
+    }
+
+    private suspend fun syncExpensesCycle(familyCode: String, token: String) {
         val filePath = "families/$familyCode/budget_v3.json"
         val apiUrl = "https://api.github.com/repos/epokanevich/family-budget-sync-db/contents/$filePath"
 
@@ -169,7 +405,7 @@ class BudgetRepository private constructor(context: Context) {
 
             // Если облако не менялось и локально нечего отправлять — завершаем мгновенно
             if (remote.notModified && dao.getUnsyncedExpenses().isEmpty()) {
-                return SyncState.CLOUD_CONNECTED
+                return
             }
 
             // 2. Сливаем локальные записи Room и облачные записи по UUIDv4 (Last-Write-Wins) + кросс-девайс дедуп
@@ -183,10 +419,18 @@ class BudgetRepository private constructor(context: Context) {
                 dao.upsertAll(plan.toUpsertLocally)
             }
 
-            if (!plan.needCloudPush) return SyncState.CLOUD_CONNECTED
+            if (!plan.needCloudPush) return
 
-            // 3. Сохраняем объединённый список в облако
-            val putCode = putRemoteFile(apiUrl, token, familyCode, plan.mergedMap, remote.sha) { newSha ->
+            // 3. Сохраняем объединённый список в облако (с актуальным CategoryRegistry из config_v1.json)
+            val registrySnapshot = synchronized(configLock) { _categoryRegistry.value }
+            val putCode = putRemoteExpensesFile(
+                apiUrl = apiUrl,
+                token = token,
+                familyCode = familyCode,
+                mergedMap = plan.mergedMap,
+                registry = registrySnapshot,
+                remoteSha = remote.sha
+            ) { newSha ->
                 cachedRemoteSha = newSha?.ifBlank { null } ?: remote.sha
                 cachedEtag = null
                 cachedRemoteMap = plan.mergedMap.mapValues { it.value.copy(isSynced = true) }
@@ -196,7 +440,7 @@ class BudgetRepository private constructor(context: Context) {
                 putCode in 200..299 -> {
                     // Только теперь отправленные локальные изменения (включая losers дедупа) считаются синхронизированными
                     markPushedAsSynced(plan.pushedVersions)
-                    return SyncState.CLOUD_CONNECTED
+                    return
                 }
                 putCode == HttpURLConnection.HTTP_CONFLICT -> {
                     cachedEtag = null
@@ -213,22 +457,27 @@ class BudgetRepository private constructor(context: Context) {
                 }
             }
         }
-        return SyncState.CLOUD_CONNECTED
     }
 
-    private suspend fun fetchRemoteSnapshot(apiUrl: String, filePath: String, token: String): RemoteSnapshot {
+    private fun fetchGithubFileContent(
+        apiUrl: String,
+        token: String,
+        etag: String?,
+        errorLabel: String
+    ): GithubFileFetchResult {
         val getConn = openGithubConnection(apiUrl, token, "GET", readTimeoutMs = 25_000)
         try {
-            if (!cachedEtag.isNullOrBlank()) {
-                getConn.setRequestProperty("If-None-Match", cachedEtag)
+            if (!etag.isNullOrBlank()) {
+                getConn.setRequestProperty("If-None-Match", etag)
             }
             val getCode = getConn.responseCode
-            when {
-                getCode == HttpURLConnection.HTTP_NOT_MODIFIED -> {
-                    return RemoteSnapshot(cachedRemoteSha, cachedRemoteMap, notModified = true)
+            return when {
+                getCode == HttpURLConnection.HTTP_NOT_MODIFIED -> GithubFileFetchResult.NotModified
+                getCode == HttpURLConnection.HTTP_NOT_FOUND -> {
+                    getConn.drainErrorStream()
+                    GithubFileFetchResult.NotFound
                 }
                 getCode in 200..299 -> {
-                    cachedEtag = null
                     val body = getConn.readBodyText()
                     val fileObj = JSONObject(body)
                     val remoteSha = fileObj.optString("sha", "").ifBlank { null }
@@ -242,48 +491,119 @@ class BudgetRepository private constructor(context: Context) {
                         contentB64 = fetchBlobContent(remoteSha, token)
                     }
 
-                    val remoteMap = mutableMapOf<String, ExpenseEntity>()
-                    if (contentB64.isNotBlank()) {
-                        val decodedJson = String(Base64.decode(contentB64, Base64.DEFAULT), Charsets.UTF_8)
-                        val arr = JSONArray(decodedJson)
-                        for (i in 0 until arr.length()) {
-                            val itemObj = arr.optJSONObject(i) ?: continue
-                            val parsed = ExpenseEntity.fromJsonObject(itemObj) ?: continue
-                            remoteMap[parsed.id] = parsed
-                        }
+                    val decodedText = if (contentB64.isNotBlank()) {
+                        String(Base64.decode(contentB64, Base64.DEFAULT), Charsets.UTF_8)
+                    } else {
+                        ""
                     }
-
-                    // Защита от случайной перезаписи непустой облачной базы при сбое чтения
-                    if (remoteSize > 5 && remoteMap.isEmpty()) {
-                        throw SyncGuardException("Sync guard: remote size $remoteSize decoded 0 items")
-                    }
-
-                    cachedEtag = getConn.getHeaderField("ETag")
-                    cachedRemoteSha = remoteSha
-                    cachedRemoteMap = remoteMap.toMap()
-                    return RemoteSnapshot(remoteSha, remoteMap, notModified = false)
-                }
-                getCode == HttpURLConnection.HTTP_NOT_FOUND -> {
-                    getConn.drainErrorStream()
-                    cachedEtag = null
-                    // 404 — это «новая пустая база» только для устройства, которое ещё ни разу не синхронизировалось.
-                    // Иначе (протухший токен, потеря доступа, переименование) нельзя перезаливать файл с нуля.
-                    val hasSyncedHistory = cachedRemoteSha != null || dao.countSyncedExpenses() > 0
-                    if (hasSyncedHistory) {
-                        throw SyncGuardException(
-                            "Sync guard: GET 404 for $filePath, but local DB already has synced records — refusing to recreate cloud file"
-                        )
-                    }
-                    return RemoteSnapshot(null, emptyMap(), notModified = false)
+                    GithubFileFetchResult.Loaded(
+                        sha = remoteSha,
+                        size = remoteSize,
+                        etag = getConn.getHeaderField("ETag"),
+                        decodedText = decodedText
+                    )
                 }
                 else -> {
                     getConn.drainErrorStream()
-                    cachedEtag = null
-                    throw IllegalStateException("GitHub Sync HTTP $getCode")
+                    throw IllegalStateException("$errorLabel HTTP $getCode")
                 }
             }
         } finally {
             getConn.disconnect()
+        }
+    }
+
+    private fun fetchRemoteConfigSnapshot(
+        apiUrl: String,
+        filePath: String,
+        familyCode: String,
+        token: String
+    ): RemoteConfigSnapshot {
+        val res = runCatching {
+            fetchGithubFileContent(apiUrl, token, cachedConfigEtag, "GitHub Config Sync")
+        }.onFailure {
+            cachedConfigEtag = null
+        }.getOrThrow()
+
+        return when (res) {
+            is GithubFileFetchResult.NotModified -> {
+                RemoteConfigSnapshot(cachedConfigSha, cachedRemoteConfig, notModified = true)
+            }
+            is GithubFileFetchResult.NotFound -> {
+                cachedConfigEtag = null
+                val hasSyncedConfig = cachedConfigSha != null || prefs.hasSyncedConfigForFamily(familyCode)
+                if (hasSyncedConfig) {
+                    throw SyncGuardException(
+                        "Sync guard: GET 404 for $filePath, but config was already synced — refusing to recreate cloud config"
+                    )
+                }
+                RemoteConfigSnapshot(null, null, notModified = false)
+            }
+            is GithubFileFetchResult.Loaded -> {
+                cachedConfigEtag = null
+                val parsed = if (res.decodedText.isNotBlank()) {
+                    FamilyConfig.fromJsonString(res.decodedText)
+                } else {
+                    null
+                }
+                if (res.size > 5 && parsed == null) {
+                    throw SyncGuardException(
+                        "Sync guard: remote config size ${res.size} could not be parsed"
+                    )
+                }
+                cachedConfigEtag = res.etag
+                cachedConfigSha = res.sha
+                cachedRemoteConfig = parsed
+                RemoteConfigSnapshot(res.sha, parsed, notModified = false)
+            }
+        }
+    }
+
+    private suspend fun fetchRemoteSnapshot(apiUrl: String, filePath: String, token: String): RemoteSnapshot {
+        val res = runCatching {
+            fetchGithubFileContent(apiUrl, token, cachedEtag, "GitHub Sync")
+        }.onFailure {
+            cachedEtag = null
+        }.getOrThrow()
+
+        return when (res) {
+            is GithubFileFetchResult.NotModified -> {
+                RemoteSnapshot(cachedRemoteSha, cachedRemoteMap, notModified = true)
+            }
+            is GithubFileFetchResult.NotFound -> {
+                cachedEtag = null
+                // 404 — это «новая пустая база» только для устройства, которое ещё ни разу не синхронизировалось.
+                // Иначе (протухший токен, потеря доступа, переименование) нельзя перезаливать файл с нуля.
+                val hasSyncedHistory = cachedRemoteSha != null || dao.countSyncedExpenses() > 0
+                if (hasSyncedHistory) {
+                    throw SyncGuardException(
+                        "Sync guard: GET 404 for $filePath, but local DB already has synced records — refusing to recreate cloud file"
+                    )
+                }
+                RemoteSnapshot(null, emptyMap(), notModified = false)
+            }
+            is GithubFileFetchResult.Loaded -> {
+                cachedEtag = null
+                val remoteMap = mutableMapOf<String, ExpenseEntity>()
+                if (res.decodedText.isNotBlank()) {
+                    val arr = JSONArray(res.decodedText)
+                    for (i in 0 until arr.length()) {
+                        val itemObj = arr.optJSONObject(i) ?: continue
+                        val parsed = ExpenseEntity.fromJsonObject(itemObj) ?: continue
+                        remoteMap[parsed.id] = parsed
+                    }
+                }
+
+                // Защита от случайной перезаписи непустой облачной базы при сбое чтения
+                if (res.size > 5 && remoteMap.isEmpty()) {
+                    throw SyncGuardException("Sync guard: remote size ${res.size} decoded 0 items")
+                }
+
+                cachedEtag = res.etag
+                cachedRemoteSha = res.sha
+                cachedRemoteMap = remoteMap.toMap()
+                RemoteSnapshot(res.sha, remoteMap, notModified = false)
+            }
         }
     }
 
@@ -306,25 +626,44 @@ class BudgetRepository private constructor(context: Context) {
         }
     }
 
-    /** Выполняет PUT и возвращает HTTP-код; [onSuccess] вызывается с новым sha при 200..299. */
-    private fun putRemoteFile(
+    private fun putRemoteExpensesFile(
         apiUrl: String,
         token: String,
         familyCode: String,
         mergedMap: Map<String, ExpenseEntity>,
+        registry: CategoryRegistry,
         remoteSha: String?,
         onSuccess: (newSha: String?) -> Unit
     ): Int {
         val sortedMerged = mergedMap.values.sortedByDescending { it.createdAtEpochMs }
         val jsonArray = JSONArray()
         for (item in sortedMerged) {
-            jsonArray.put(item.toJsonObject())
+            jsonArray.put(item.toJsonObject(registry))
         }
         val rawBytes = jsonArray.toString().toByteArray(Charsets.UTF_8)
+        return putRemoteFileBytes(
+            apiUrl = apiUrl,
+            token = token,
+            commitMessage = "Sync family budget ($familyCode)",
+            rawBytes = rawBytes,
+            remoteSha = remoteSha,
+            onSuccess = onSuccess
+        )
+    }
+
+    /** Выполняет PUT произвольного файла в GitHub Contents API и возвращает HTTP-код; [onSuccess] вызывается при 200..299. */
+    private fun putRemoteFileBytes(
+        apiUrl: String,
+        token: String,
+        commitMessage: String,
+        rawBytes: ByteArray,
+        remoteSha: String?,
+        onSuccess: (newSha: String?) -> Unit
+    ): Int {
         val encodedB64 = Base64.encodeToString(rawBytes, Base64.NO_WRAP)
 
         val putBody = JSONObject().apply {
-            put("message", "Sync family budget ($familyCode)")
+            put("message", commitMessage)
             put("content", encodedB64)
             if (remoteSha != null) {
                 put("sha", remoteSha)
@@ -487,11 +826,12 @@ class BudgetRepository private constructor(context: Context) {
                 return@withLock false
             }
 
-            val guessedCategory = ExpenseCategory.guessFromMerchant(merchant, isIncome = false)
+            val registrySnapshot = synchronized(configLock) { _categoryRegistry.value }
+            val guessedCategory = registrySnapshot.guessFromMerchant(merchant, isIncome = false)
             val expense = ExpenseEntity(
                 amountRub = amountRub,
                 merchant = merchant.ifBlank { "Покупка по карте" },
-                categoryName = guessedCategory.name,
+                categoryName = guessedCategory.id,
                 authorName = prefs.currentUserName,
                 sourceType = sourceType,
                 isPendingConfirmation = !prefs.autoConfirmBankPush,
@@ -509,6 +849,9 @@ class BudgetRepository private constructor(context: Context) {
     }
 
     companion object {
+        internal const val FOREGROUND_POLL_INTERVAL_MS = 15_000L
+        internal const val BACKGROUND_POLL_INTERVAL_MS = 180_000L
+
         /** Окно кросс-девайс дедупа Mir Pay ↔ Сбер; должно быть >= STALE_NOTIFICATION_MS сервиса (90 сек). */
         internal const val CROSS_DEVICE_DEDUP_WINDOW_MS = 90_000L
 
@@ -520,6 +863,26 @@ class BudgetRepository private constructor(context: Context) {
         internal const val SAME_DEVICE_DEDUP_WINDOW_MS = 120_000L
 
         private val BALANCE_MARKER_REGEX = Regex("(?:баланс|остаток|доступно)", RegexOption.IGNORE_CASE)
+
+        internal fun buildConfigSyncPlan(
+            local: FamilyConfig,
+            remote: FamilyConfig?,
+            remoteExists: Boolean
+        ): ConfigSyncMergePlan {
+            if (!remoteExists || remote == null) {
+                return ConfigSyncMergePlan(
+                    mergedConfig = local,
+                    updateLocal = false,
+                    needCloudPush = true
+                )
+            }
+            val merged = FamilyConfig.merge(local, remote)
+            return ConfigSyncMergePlan(
+                mergedConfig = merged,
+                updateLocal = !merged.isEquivalentTo(local),
+                needCloudPush = !merged.isEquivalentTo(remote)
+            )
+        }
 
         internal fun buildAmountSignature(amountRub: Double): String =
             "AMT_" + String.format(java.util.Locale.US, "%.2f", amountRub)

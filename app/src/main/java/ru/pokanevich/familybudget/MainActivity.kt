@@ -90,8 +90,8 @@ import ru.pokanevich.familybudget.ai.AiBudgetAdvisor
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import ru.pokanevich.familybudget.data.BudgetRepository
-import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.CsvExporter
+import ru.pokanevich.familybudget.data.FamilyPreferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import ru.pokanevich.familybudget.data.ExpenseEntity
@@ -188,11 +188,12 @@ fun FamilyBudgetApp(
     val pendingPushExpenses by repository.pendingPushExpenses.collectAsState(initial = emptyList())
     val syncState by repository.syncState.collectAsState()
     val isSyncing by repository.isSyncing.collectAsState()
-    val categoryRegistry = remember { CategoryRegistry.DEFAULT }
+    val familyConfig by repository.familyConfig.collectAsState()
+    val categoryRegistry by repository.categoryRegistry.collectAsState()
 
     var currentUserName by remember { mutableStateOf(repository.prefs.currentUserName) }
     var familySpaceCode by remember { mutableStateOf(repository.prefs.familySpaceCode) }
-    var monthlyBudgetRub by remember { mutableStateOf(repository.prefs.monthlyBudgetRub) }
+    val monthlyBudgetRub = familyConfig.monthlyBudgetRub
     var autoConfirmPush by remember { mutableStateOf(repository.prefs.autoConfirmBankPush) }
     var geminiApiKey by remember { mutableStateOf(repository.prefs.geminiApiKey) }
 
@@ -260,24 +261,36 @@ fun FamilyBudgetApp(
     }
     var isBatteryUnrestricted by remember { mutableStateOf(checkBatteryUnrestricted()) }
 
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycleOwner, repository) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                val granted = NotificationManagerCompat.getEnabledListenerPackages(context)
-                    .contains(context.packageName)
-                isPushAccessGranted = granted
-                isBatteryUnrestricted = checkBatteryUnrestricted()
-                if (granted) {
-                    runCatching {
-                        NotificationListenerService.requestRebind(
-                            ComponentName(context, BankPushListenerService::class.java)
-                        )
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    repository.setForegroundActive(true)
+                }
+                Lifecycle.Event.ON_RESUME -> {
+                    val granted = NotificationManagerCompat.getEnabledListenerPackages(context)
+                        .contains(context.packageName)
+                    isPushAccessGranted = granted
+                    isBatteryUnrestricted = checkBatteryUnrestricted()
+                    if (granted) {
+                        runCatching {
+                            NotificationListenerService.requestRebind(
+                                ComponentName(context, BankPushListenerService::class.java)
+                            )
+                        }
                     }
                 }
+                Lifecycle.Event.ON_STOP -> {
+                    repository.setForegroundActive(false)
+                }
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            repository.setForegroundActive(false)
+        }
     }
 
     val openBatteryExemption: () -> Unit = {
@@ -756,21 +769,25 @@ fun FamilyBudgetApp(
             onThemePreview = onThemeModeChange,
             onDismiss = { showSettingsSheet = false },
             onSave = { newName, newCode, newBudget, newAutoConfirm, newApiKey, newTheme ->
+                val previousCode = FamilyPreferences.normalizeFamilyCode(familySpaceCode)
                 repository.prefs.currentUserName = newName
                 repository.prefs.familySpaceCode = newCode
-                repository.prefs.monthlyBudgetRub = newBudget
+                val savedCode = repository.prefs.familySpaceCode
+                val codeChanged = FamilyPreferences.normalizeFamilyCode(savedCode) != previousCode
                 repository.prefs.autoConfirmBankPush = newAutoConfirm
                 repository.prefs.geminiApiKey = newApiKey
                 repository.prefs.themeMode = newTheme.prefKey
 
                 currentUserName = newName
-                familySpaceCode = newCode
-                monthlyBudgetRub = newBudget
+                familySpaceCode = savedCode
                 autoConfirmPush = newAutoConfirm
                 geminiApiKey = repository.prefs.geminiApiKey
                 onThemeModeChange(newTheme)
 
-                repository.startRealtimeSync()
+                repository.updateMonthlyBudget(newBudget)
+                if (codeChanged) {
+                    scope.launch { repository.syncWithCloudNow() }
+                }
                 showSettingsSheet = false
             }
         )

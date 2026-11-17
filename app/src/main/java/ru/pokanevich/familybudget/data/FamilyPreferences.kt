@@ -83,6 +83,56 @@ class FamilyPreferences(context: Context) {
     }
 
     /**
+     * Флаг наличия локальных изменений семейного конфига (`monthlyBudgetRub` / категорий),
+     * которые ещё не отправлены в `config_v1.json`.
+     */
+    var hasUnsyncedConfig: Boolean
+        get() = runCatching { prefs.getBoolean(KEY_HAS_UNSYNCED_CONFIG, false) }.getOrDefault(false)
+        set(value) = prefs.edit().putBoolean(KEY_HAS_UNSYNCED_CONFIG, value).apply()
+
+    fun loadFamilyConfig(): FamilyConfig {
+        val raw = safeGetString(KEY_FAMILY_CONFIG_JSON, "")
+        if (raw.isNotBlank()) {
+            FamilyConfig.fromJsonString(raw)?.let { return it }
+        }
+        return FamilyConfig(
+            schemaVersion = FamilyConfig.CURRENT_SCHEMA_VERSION,
+            monthlyBudgetRub = monthlyBudgetRub,
+            budgetUpdatedAtEpochMs = 0L,
+            categories = emptyList()
+        )
+    }
+
+    fun saveFamilyConfig(config: FamilyConfig, hasUnsynced: Boolean) {
+        prefs.edit()
+            .putString(KEY_FAMILY_CONFIG_JSON, config.toJsonObject().toString())
+            .putBoolean(KEY_HAS_UNSYNCED_CONFIG, hasUnsynced)
+            .putFloat("monthly_budget_rub", config.monthlyBudgetRub.toFloat())
+            .apply()
+    }
+
+    fun hasSyncedConfigForFamily(familyCode: String): Boolean {
+        val normalized = normalizeFamilyCode(familyCode)
+        return normalized in syncedConfigFamilies
+    }
+
+    fun markConfigSyncedForFamily(familyCode: String) {
+        val normalized = normalizeFamilyCode(familyCode)
+        val current = syncedConfigFamilies
+        if (normalized !in current) {
+            val serialized = (current + normalized).joinToString("\n")
+            prefs.edit().putString(KEY_SYNCED_CONFIG_FAMILIES, serialized).apply()
+        }
+    }
+
+    private val syncedConfigFamilies: Set<String>
+        get() = safeGetString(KEY_SYNCED_CONFIG_FAMILIES, "")
+            .split('\n')
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .toSet()
+
+    /**
      * Последние [MAX_PERSISTED_PUSH_DEDUP_KEYS] ключей уже обработанных уведомлений
      * (`sbn.key|postTime`), чтобы перезапуск процесса не сбрасывал защиту от повторной обработки.
      * Порядок: от старых к новым.
@@ -105,5 +155,11 @@ class FamilyPreferences(context: Context) {
         const val MAX_PERSISTED_PUSH_DEDUP_KEYS = 50
         private const val KEY_GEMINI_CLEARED = "gemini_api_key_cleared"
         private const val KEY_RECENT_PUSH_DEDUP_KEYS = "recent_push_dedup_keys"
+        private const val KEY_FAMILY_CONFIG_JSON = "family_config_v1_json"
+        private const val KEY_HAS_UNSYNCED_CONFIG = "has_unsynced_config"
+        private const val KEY_SYNCED_CONFIG_FAMILIES = "synced_config_families"
+
+        fun normalizeFamilyCode(raw: String): String =
+            raw.trim().ifBlank { "POKANE-FAMILY" }.replace(Regex("[^A-Za-z0-9_-]"), "_")
     }
 }
