@@ -66,8 +66,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -141,12 +139,12 @@ class MainActivity : FragmentActivity() {
             val isBiometricEnabled by pinManager.isBiometricEnabled.collectAsState()
             val lockSessionId by pinManager.lockSessionId.collectAsState()
 
-            var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+            var selectedTab by rememberSaveable { mutableStateOf(0) }
             var selectedPeriodName by rememberSaveable { mutableStateOf(BudgetPeriod.MONTH.name) }
             val selectedPeriod = remember(selectedPeriodName) {
                 runCatching { BudgetPeriod.valueOf(selectedPeriodName) }.getOrDefault(BudgetPeriod.MONTH)
             }
-            var anchorEpochMs by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
+            var anchorEpochMs by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }
 
             val checkBatteryUnrestricted = {
                 val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager

@@ -246,110 +246,6 @@ fun PinLockScreen(
             val keySpacing = if (isCompactCover) 14.dp else 20.dp
             val rowSpacing = if (isShortHeight) 10.dp else 14.dp
 
-            val contentColumn: @Composable (Boolean) -> Unit = { insideCard ->
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(
-                            horizontal = if (insideCard) 28.dp else if (isCompactCover) 16.dp else 24.dp,
-                            vertical = if (insideCard) 28.dp else 16.dp
-                        ),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(if (isShortHeight) 48.dp else 58.dp)
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(palette.accentEmeraldSoft),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Lock,
-                            contentDescription = null,
-                            tint = palette.accentEmerald,
-                            modifier = Modifier.size(if (isShortHeight) 24.dp else 28.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(if (isShortHeight) 12.dp else 16.dp))
-
-                    Text(
-                        text = "Семейный котёл",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = palette.textPrimary,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Введите PIN-код для входа",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = palette.textSecondary,
-                        textAlign = TextAlign.Center
-                    )
-
-                    Spacer(modifier = Modifier.height(if (isShortHeight) 18.dp else 24.dp))
-
-                    PinDotsRow(
-                        enteredCount = enteredPin.length,
-                        isError = isErrorShaking || errorMessage != null,
-                        modifier = Modifier.offset { IntOffset(shakeOffset.value.roundToInt(), 0) }
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(22.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (errorMessage != null) {
-                            Text(
-                                text = errorMessage!!,
-                                style = MaterialTheme.typography.labelMedium,
-                                color = palette.accentCoral,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(if (isShortHeight) 10.dp else 16.dp))
-
-                    PinNumericKeypad(
-                        buttonSize = keySize,
-                        horizontalSpacing = keySpacing,
-                        verticalSpacing = rowSpacing,
-                        keyContainerColor = if (insideCard) palette.surfaceElevated else palette.surfaceCard,
-                        enabled = cooldownSecondsLeft == 0 && !isErrorShaking,
-                        canBackspace = enteredPin.isNotEmpty() && cooldownSecondsLeft == 0 && !isErrorShaking,
-                        showBiometricButton = canUseBiometrics,
-                        onDigitPress = onDigitPress,
-                        onBackspacePress = onBackspacePress,
-                        onBiometricPress = launchBiometric
-                    )
-
-                    if (canUseBiometrics) {
-                        Spacer(modifier = Modifier.height(if (isShortHeight) 8.dp else 12.dp))
-                        TextButton(onClick = launchBiometric) {
-                            Icon(
-                                imageVector = Icons.Rounded.Fingerprint,
-                                contentDescription = null,
-                                tint = palette.accentEmerald,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "Разблокировать по биометрии",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = palette.accentEmerald,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-                }
-            }
-
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -366,7 +262,23 @@ fun PinLockScreen(
                         color = palette.surfaceCard,
                         border = BorderStroke(1.dp, palette.outlineSubtle)
                     ) {
-                        contentColumn(true)
+                        PinLockCardContent(
+                            insideCard = true,
+                            isCompactCover = isCompactCover,
+                            isShortHeight = isShortHeight,
+                            keySize = keySize,
+                            keySpacing = keySpacing,
+                            rowSpacing = rowSpacing,
+                            enteredCount = enteredPin.length,
+                            isErrorShaking = isErrorShaking,
+                            errorMessage = errorMessage,
+                            shakeOffsetPx = shakeOffset.value,
+                            cooldownSecondsLeft = cooldownSecondsLeft,
+                            canUseBiometrics = canUseBiometrics,
+                            onDigitPress = onDigitPress,
+                            onBackspacePress = onBackspacePress,
+                            onBiometricPress = launchBiometric
+                        )
                     }
                 } else {
                     Box(
@@ -374,9 +286,147 @@ fun PinLockScreen(
                             .widthIn(max = 380.dp)
                             .fillMaxWidth()
                     ) {
-                        contentColumn(false)
+                        PinLockCardContent(
+                            insideCard = false,
+                            isCompactCover = isCompactCover,
+                            isShortHeight = isShortHeight,
+                            keySize = keySize,
+                            keySpacing = keySpacing,
+                            rowSpacing = rowSpacing,
+                            enteredCount = enteredPin.length,
+                            isErrorShaking = isErrorShaking,
+                            errorMessage = errorMessage,
+                            shakeOffsetPx = shakeOffset.value,
+                            cooldownSecondsLeft = cooldownSecondsLeft,
+                            canUseBiometrics = canUseBiometrics,
+                            onDigitPress = onDigitPress,
+                            onBackspacePress = onBackspacePress,
+                            onBiometricPress = launchBiometric
+                        )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PinLockCardContent(
+    insideCard: Boolean,
+    isCompactCover: Boolean,
+    isShortHeight: Boolean,
+    keySize: Dp,
+    keySpacing: Dp,
+    rowSpacing: Dp,
+    enteredCount: Int,
+    isErrorShaking: Boolean,
+    errorMessage: String?,
+    shakeOffsetPx: Float,
+    cooldownSecondsLeft: Int,
+    canUseBiometrics: Boolean,
+    onDigitPress: (Char) -> Unit,
+    onBackspacePress: () -> Unit,
+    onBiometricPress: () -> Unit
+) {
+    val palette = LocalFamilyPalette.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = if (insideCard) 28.dp else if (isCompactCover) 16.dp else 24.dp,
+                vertical = if (insideCard) 28.dp else 16.dp
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(if (isShortHeight) 48.dp else 58.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(palette.accentEmeraldSoft),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Lock,
+                contentDescription = null,
+                tint = palette.accentEmerald,
+                modifier = Modifier.size(if (isShortHeight) 24.dp else 28.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(if (isShortHeight) 12.dp else 16.dp))
+
+        Text(
+            text = "Семейный котёл",
+            style = MaterialTheme.typography.titleLarge,
+            color = palette.textPrimary,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Введите PIN-код для входа",
+            style = MaterialTheme.typography.bodyMedium,
+            color = palette.textSecondary,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(if (isShortHeight) 18.dp else 24.dp))
+
+        PinDotsRow(
+            enteredCount = enteredCount,
+            isError = isErrorShaking || errorMessage != null,
+            modifier = Modifier.offset { IntOffset(shakeOffsetPx.roundToInt(), 0) }
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(22.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (errorMessage != null) {
+                Text(
+                    text = errorMessage,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = palette.accentCoral,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(if (isShortHeight) 10.dp else 16.dp))
+
+        PinNumericKeypad(
+            buttonSize = keySize,
+            horizontalSpacing = keySpacing,
+            verticalSpacing = rowSpacing,
+            keyContainerColor = if (insideCard) palette.surfaceElevated else palette.surfaceCard,
+            enabled = cooldownSecondsLeft == 0 && !isErrorShaking,
+            canBackspace = enteredCount > 0 && cooldownSecondsLeft == 0 && !isErrorShaking,
+            showBiometricButton = canUseBiometrics,
+            onDigitPress = onDigitPress,
+            onBackspacePress = onBackspacePress,
+            onBiometricPress = onBiometricPress
+        )
+
+        if (canUseBiometrics) {
+            Spacer(modifier = Modifier.height(if (isShortHeight) 8.dp else 12.dp))
+            TextButton(onClick = onBiometricPress) {
+                Icon(
+                    imageVector = Icons.Rounded.Fingerprint,
+                    contentDescription = null,
+                    tint = palette.accentEmerald,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Разблокировать по биометрии",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = palette.accentEmerald,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         }
     }
