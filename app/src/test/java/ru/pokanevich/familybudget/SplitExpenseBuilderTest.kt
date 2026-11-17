@@ -18,7 +18,7 @@ class SplitExpenseBuilderTest {
         val now = 1_700_000_123_000L
         val parts = listOf(
             SplitPartInput(amountRub = 1200.0, category = ExpenseCategory.GROCERIES, note = "Еда"),
-            SplitPartInput(amountRub = 450.5, category = ExpenseCategory.HOUSEHOLD, note = "Химия"),
+            SplitPartInput(amountRub = 450.5, category = ExpenseCategory.SHOPPING, note = "Химия"),
             SplitPartInput(amountRub = 349.5, category = ExpenseCategory.HEALTH, note = "")
         )
 
@@ -78,7 +78,7 @@ class SplitExpenseBuilderTest {
             original = original,
             parts = listOf(
                 SplitPartInput(1000.0, ExpenseCategory.GROCERIES, "Продукты"),
-                SplitPartInput(500.0, ExpenseCategory.HOUSEHOLD, "Бытовое")
+                SplitPartInput(500.0, ExpenseCategory.SHOPPING, "Бытовое")
             ),
             totalAmountRub = 1500.0,
             merchant = "Пятёрочка",
@@ -120,7 +120,7 @@ class SplitExpenseBuilderTest {
             original = null,
             parts = listOf(
                 SplitPartInput(333.33, ExpenseCategory.GROCERIES),
-                SplitPartInput(333.33, ExpenseCategory.HOUSEHOLD),
+                SplitPartInput(333.33, ExpenseCategory.SHOPPING),
                 SplitPartInput(333.33, ExpenseCategory.OTHER)
             ),
             totalAmountRub = 1000.00,
@@ -150,7 +150,7 @@ class SplitExpenseBuilderTest {
             original = null,
             parts = listOf(
                 SplitPartInput(500.0, ExpenseCategory.GROCERIES),
-                SplitPartInput(0.0, ExpenseCategory.HOUSEHOLD)
+                SplitPartInput(0.0, ExpenseCategory.SHOPPING)
             ),
             totalAmountRub = 500.0,
             merchant = "Ашан",
@@ -165,7 +165,7 @@ class SplitExpenseBuilderTest {
             original = null,
             parts = listOf(
                 SplitPartInput(400.0, ExpenseCategory.GROCERIES),
-                SplitPartInput(599.98, ExpenseCategory.HOUSEHOLD)
+                SplitPartInput(599.98, ExpenseCategory.SHOPPING)
             ),
             totalAmountRub = 1000.0,
             merchant = "Ашан",
@@ -180,7 +180,7 @@ class SplitExpenseBuilderTest {
             original = null,
             parts = listOf(
                 SplitPartInput(100.0, ExpenseCategory.GROCERIES),
-                SplitPartInput(100.0, ExpenseCategory.HOUSEHOLD)
+                SplitPartInput(100.0, ExpenseCategory.SHOPPING)
             ),
             totalAmountRub = 0.0,
             merchant = "Ашан",

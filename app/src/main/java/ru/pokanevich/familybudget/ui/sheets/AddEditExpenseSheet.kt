@@ -144,7 +144,7 @@ fun AddEditExpenseSheet(
                 SplitPartDraft(
                     2,
                     "",
-                    if (startCategory == ExpenseCategory.GROCERIES) ExpenseCategory.HOUSEHOLD else ExpenseCategory.OTHER,
+                    if (startCategory == ExpenseCategory.GROCERIES) ExpenseCategory.SHOPPING else ExpenseCategory.OTHER,
                     ""
                 )
             )
