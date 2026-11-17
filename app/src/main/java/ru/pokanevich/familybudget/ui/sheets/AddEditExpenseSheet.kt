@@ -23,6 +23,9 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.CallSplit
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -38,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -56,12 +60,15 @@ import androidx.compose.ui.unit.sp
 import ru.pokanevich.familybudget.data.ExpenseCategory
 import ru.pokanevich.familybudget.data.ExpenseEntity
 import ru.pokanevich.familybudget.data.OperationType
+import ru.pokanevich.familybudget.data.SplitExpenseBuilder
+import ru.pokanevich.familybudget.data.SplitPartInput
 import ru.pokanevich.familybudget.ui.theme.AuthorAvatarCircle
 import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
 import ru.pokanevich.familybudget.ui.theme.visual
 import ru.pokanevich.familybudget.ui.util.AmountExpressionEvaluator
 import ru.pokanevich.familybudget.ui.util.Formatters
+import kotlin.math.abs
 
 private val quickExpenseMerchants = listOf(
     "Пятёрочка", "ВкусВилл", "Кофе", "Обед", "Аптека", "АЗС", "Ozon"
@@ -73,6 +80,13 @@ private val quickIncomeNotes = listOf(
 
 private val quickTransferTargets = listOf(
     "На карту", "Накопительный счёт", "Наличные", "Между счетами"
+)
+
+private data class SplitPartDraft(
+    val key: Int,
+    val amountText: String,
+    val category: ExpenseCategory,
+    val note: String
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -91,6 +105,13 @@ fun AddEditExpenseSheet(
         authorName: String,
         note: String,
         operationType: String
+    ) -> Unit,
+    onSaveSplit: (
+        totalAmountRub: Double,
+        merchant: String,
+        authorName: String,
+        note: String,
+        parts: List<SplitPartInput>
     ) -> Unit
 ) {
     val palette = LocalFamilyPalette.current
@@ -113,9 +134,26 @@ fun AddEditExpenseSheet(
     var noteText by remember(editingExpense) { mutableStateOf(startNote) }
     var selectedCategory by remember(editingExpense, initialMerchant) { mutableStateOf(startCategory) }
     var selectedAuthor by remember(editingExpense, defaultAuthorName) { mutableStateOf(startAuthor) }
+    var isSplitMode by remember(editingExpense) { mutableStateOf(false) }
+    var nextSplitKey by remember(editingExpense) { mutableIntStateOf(3) }
+    var expandedCategoryPartKey by remember(editingExpense) { mutableStateOf<Int?>(null) }
+    var splitParts by remember(editingExpense) {
+        mutableStateOf(
+            listOf(
+                SplitPartDraft(1, "", startCategory, ""),
+                SplitPartDraft(
+                    2,
+                    "",
+                    if (startCategory == ExpenseCategory.GROCERIES) ExpenseCategory.HOUSEHOLD else ExpenseCategory.OTHER,
+                    ""
+                )
+            )
+        )
+    }
 
     val isIncomeMode = selectedOperationType == OperationType.INCOME
     val isTransferMode = selectedOperationType == OperationType.TRANSFER
+    val isExpenseMode = selectedOperationType == OperationType.EXPENSE
 
     val activeCategories = if (isIncomeMode) {
         ExpenseCategory.incomeCategories
@@ -129,6 +167,19 @@ fun AddEditExpenseSheet(
     val showExpressionPreview = remember(amountText, evaluatedAmount) {
         AmountExpressionEvaluator.hasOperators(amountText) && evaluatedAmount != null
     }
+
+    val parsedPartAmounts = remember(splitParts) {
+        splitParts.map { AmountExpressionEvaluator.evaluate(it.amountText) }
+    }
+    val splitPartsSum = parsedPartAmounts.sumOf { it ?: 0.0 }
+    val splitRemaining = parsedAmount - splitPartsSum
+    val isSplitExact = parsedAmount > 0.0 &&
+        abs(splitRemaining) <= SplitExpenseBuilder.AMOUNT_TOLERANCE_RUB + 1e-6
+    val isSplitValid = isValid &&
+        splitParts.size >= 2 &&
+        parsedPartAmounts.all { it != null && it > 0.0 } &&
+        isSplitExact
+    val canSave = if (isSplitMode && isExpenseMode) isSplitValid else isValid
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -223,11 +274,16 @@ fun AddEditExpenseSheet(
                                             }
                                         }
                                         OperationType.INCOME -> {
+                                            isSplitMode = false
+                                            expandedCategoryPartKey = null
                                             if (!selectedCategory.isIncome) {
                                                 selectedCategory = ExpenseCategory.INCOME_SALARY
                                             }
                                         }
-                                        OperationType.TRANSFER -> Unit
+                                        OperationType.TRANSFER -> {
+                                            isSplitMode = false
+                                            expandedCategoryPartKey = null
+                                        }
                                     }
                                 },
                             shape = RoundedCornerShape(11.dp),
@@ -414,6 +470,64 @@ fun AddEditExpenseSheet(
                 }
             }
 
+            // Split mode toggle (only in Expense mode)
+            if (isExpenseMode) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (isSplitMode) palette.accentBlueSoft else palette.surfaceElevated,
+                    border = BorderStroke(
+                        width = if (isSplitMode) 1.5.dp else 1.dp,
+                        color = if (isSplitMode) palette.accentBlue else palette.outlineSubtle
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable {
+                            val next = !isSplitMode
+                            isSplitMode = next
+                            expandedCategoryPartKey = null
+                            if (next && splitParts.size < 2) {
+                                splitParts = listOf(
+                                    SplitPartDraft(1, "", selectedCategory, ""),
+                                    SplitPartDraft(2, "", ExpenseCategory.OTHER, "")
+                                )
+                                nextSplitKey = 3
+                            }
+                        }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.CallSplit,
+                                contentDescription = null,
+                                tint = if (isSplitMode) palette.accentBlue else palette.textSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Text(
+                                text = "Разделить чек",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isSplitMode) palette.accentBlue else palette.textPrimary
+                            )
+                        }
+                        Text(
+                            text = if (isSplitMode) "Включено (${splitParts.size} ч.)" else "По категориям",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (isSplitMode) palette.accentBlue else palette.textSecondary
+                        )
+                    }
+                }
+            }
+
             // Payer / Author Toggle
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
@@ -565,8 +679,43 @@ fun AddEditExpenseSheet(
                 )
             }
 
-            // 4-column Visual Category Grid (скрывается для переводов между своими)
-            if (!isTransferMode) {
+            // Split Parts Editor OR 4-column Visual Category Grid (скрывается для переводов между своими)
+            if (isExpenseMode && isSplitMode) {
+                SplitReceiptSection(
+                    totalAmountRub = parsedAmount,
+                    parts = splitParts,
+                    parsedPartAmounts = parsedPartAmounts,
+                    remaining = splitRemaining,
+                    isExact = isSplitExact,
+                    expandedCategoryPartKey = expandedCategoryPartKey,
+                    onToggleCategoryPicker = { key ->
+                        expandedCategoryPartKey = if (expandedCategoryPartKey == key) null else key
+                    },
+                    onUpdatePart = { key, updated ->
+                        splitParts = splitParts.map { if (it.key == key) updated else it }
+                    },
+                    onRemovePart = { key ->
+                        if (splitParts.size > 2) {
+                            splitParts = splitParts.filterNot { it.key == key }
+                            if (expandedCategoryPartKey == key) expandedCategoryPartKey = null
+                        }
+                    },
+                    onAddPart = {
+                        val newKey = nextSplitKey
+                        nextSplitKey += 1
+                        splitParts = splitParts + SplitPartDraft(newKey, "", ExpenseCategory.OTHER, "")
+                    },
+                    onQuickFillLast = { fillAmount ->
+                        if (splitParts.isNotEmpty()) {
+                            val lastIdx = splitParts.lastIndex
+                            val formatted = AmountExpressionEvaluator.formatForInput(fillAmount)
+                            splitParts = splitParts.mapIndexed { idx, part ->
+                                if (idx == lastIdx) part.copy(amountText = formatted) else part
+                            }
+                        }
+                    }
+                )
+            } else if (!isTransferMode) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         text = "Категория",
@@ -624,25 +773,48 @@ fun AddEditExpenseSheet(
             }
 
             Button(
-                enabled = isValid,
+                enabled = canSave,
                 onClick = {
-                    val saveCategory = if (isTransferMode) ExpenseCategory.OTHER else selectedCategory
-                    val saveMerchant = merchantText.trim().ifBlank {
-                        if (isTransferMode) "Перевод между своими" else saveCategory.displayName
+                    if (isExpenseMode && isSplitMode) {
+                        val saveMerchant = merchantText.trim().ifBlank { "Покупка по карте" }
+                        val inputs = splitParts.mapIndexedNotNull { idx, part ->
+                            val amt = parsedPartAmounts.getOrNull(idx) ?: return@mapIndexedNotNull null
+                            SplitPartInput(
+                                amountRub = amt,
+                                category = part.category,
+                                note = part.note.trim()
+                            )
+                        }
+                        onSaveSplit(
+                            parsedAmount,
+                            saveMerchant,
+                            selectedAuthor,
+                            noteText.trim(),
+                            inputs
+                        )
+                    } else {
+                        val saveCategory = if (isTransferMode) ExpenseCategory.OTHER else selectedCategory
+                        val saveMerchant = merchantText.trim().ifBlank {
+                            if (isTransferMode) "Перевод между своими" else saveCategory.displayName
+                        }
+                        onSave(
+                            parsedAmount,
+                            saveMerchant,
+                            saveCategory,
+                            selectedAuthor,
+                            noteText.trim(),
+                            selectedOperationType.name
+                        )
                     }
-                    onSave(
-                        parsedAmount,
-                        saveMerchant,
-                        saveCategory,
-                        selectedAuthor,
-                        noteText.trim(),
-                        selectedOperationType.name
-                    )
                 },
                 shape = RoundedCornerShape(16.dp),
                 contentPadding = PaddingValues(vertical = 15.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isTransferMode) palette.accentBlue else palette.accentEmerald,
+                    containerColor = when {
+                        isExpenseMode && isSplitMode -> palette.accentBlue
+                        isTransferMode -> palette.accentBlue
+                        else -> palette.accentEmerald
+                    },
                     contentColor = Color.White,
                     disabledContainerColor = palette.surfaceElevated,
                     disabledContentColor = palette.textMuted
@@ -653,6 +825,7 @@ fun AddEditExpenseSheet(
             ) {
                 Text(
                     text = when {
+                        isExpenseMode && isSplitMode -> "Разделить на ${splitParts.size} части"
                         editingExpense != null -> "Сохранить изменения"
                         isIncomeMode -> "Добавить доход"
                         isTransferMode -> "Добавить перевод"
@@ -660,6 +833,314 @@ fun AddEditExpenseSheet(
                     },
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SplitReceiptSection(
+    totalAmountRub: Double,
+    parts: List<SplitPartDraft>,
+    parsedPartAmounts: List<Double?>,
+    remaining: Double,
+    isExact: Boolean,
+    expandedCategoryPartKey: Int?,
+    onToggleCategoryPicker: (Int) -> Unit,
+    onUpdatePart: (Int, SplitPartDraft) -> Unit,
+    onRemovePart: (Int) -> Unit,
+    onAddPart: () -> Unit,
+    onQuickFillLast: (Double) -> Unit
+) {
+    val palette = LocalFamilyPalette.current
+    val otherPartsSum = parsedPartAmounts.dropLast(1).sumOf { it ?: 0.0 }
+    val fillLastValue = totalAmountRub - otherPartsSum
+    val showQuickFill = totalAmountRub > 0.0 && fillLastValue > 0.0 && !isExact
+
+    val bannerBg = when {
+        isExact -> palette.accentEmeraldSoft
+        remaining < -SplitExpenseBuilder.AMOUNT_TOLERANCE_RUB -> palette.accentCoralSoft
+        else -> palette.accentAmberSoft
+    }
+    val bannerFg = when {
+        isExact -> palette.accentEmerald
+        remaining < -SplitExpenseBuilder.AMOUNT_TOLERANCE_RUB -> palette.accentCoral
+        else -> palette.accentAmber
+    }
+    val bannerText = when {
+        totalAmountRub <= 0.0 -> "Укажите общую сумму чека выше"
+        isExact -> "Сумма распределена точно"
+        remaining < -SplitExpenseBuilder.AMOUNT_TOLERANCE_RUB ->
+            "Перерасход: ${Formatters.formatRub(abs(remaining), showKopecksIfAny = true)}"
+        else ->
+            "Остаток к распределению: ${Formatters.formatRub(remaining, showKopecksIfAny = true)}"
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Части чека",
+                style = MaterialTheme.typography.labelMedium,
+                color = palette.textSecondary
+            )
+            Text(
+                text = "Итого: ${Formatters.formatRub(totalAmountRub, showKopecksIfAny = true)}",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = palette.textPrimary
+            )
+        }
+
+        // Плашка остатка к распределению + кнопка быстрого заполнения последней строки
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            color = bannerBg
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = bannerText,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = bannerFg,
+                    modifier = Modifier.weight(1f)
+                )
+                if (showQuickFill) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = palette.surfaceCard,
+                        border = BorderStroke(1.dp, bannerFg.copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { onQuickFillLast(fillLastValue) }
+                    ) {
+                        Text(
+                            text = "В последнюю",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = bannerFg,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        parts.forEachIndexed { index, part ->
+            val catVis = part.category.visual()
+            val catTint = if (palette.isDark) catVis.darkModeColor else catVis.color
+            val isPickerOpen = expandedCategoryPartKey == part.key
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                color = palette.surfaceElevated,
+                border = BorderStroke(1.dp, palette.outlineSubtle)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Часть ${index + 1}",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.textSecondary
+                        )
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = catTint.copy(alpha = 0.14f),
+                                border = BorderStroke(1.dp, catTint.copy(alpha = 0.45f)),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { onToggleCategoryPicker(part.key) }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    CategoryIconBadge(
+                                        category = part.category,
+                                        size = 20.dp,
+                                        iconSize = 12.dp,
+                                        cornerRadius = 6.dp
+                                    )
+                                    Text(
+                                        text = part.category.shortName,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = catTint,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+
+                            if (parts.size > 2) {
+                                IconButton(
+                                    onClick = { onRemovePart(part.key) },
+                                    modifier = Modifier.size(26.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "Удалить часть",
+                                        tint = palette.textMuted,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (isPickerOpen) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            ExpenseCategory.expenseCategories.chunked(4).forEach { rowCats ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    rowCats.forEach { cat ->
+                                        val selected = part.category == cat
+                                        val vis = cat.visual()
+                                        val tint = if (palette.isDark) vis.darkModeColor else vis.color
+                                        Surface(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .clickable {
+                                                    onUpdatePart(part.key, part.copy(category = cat))
+                                                    onToggleCategoryPicker(part.key)
+                                                },
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = if (selected) tint.copy(alpha = 0.16f) else palette.surfaceCard,
+                                            border = if (selected) BorderStroke(1.dp, tint) else null
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.padding(vertical = 6.dp, horizontal = 2.dp),
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.spacedBy(3.dp)
+                                            ) {
+                                                CategoryIconBadge(
+                                                    category = cat,
+                                                    size = 26.dp,
+                                                    iconSize = 14.dp,
+                                                    cornerRadius = 8.dp
+                                                )
+                                                Text(
+                                                    text = cat.shortName,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = if (selected) tint else palette.textSecondary,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    textAlign = TextAlign.Center
+                                                )
+                                            }
+                                        }
+                                    }
+                                    repeat(4 - rowCats.size) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = part.amountText,
+                            onValueChange = { raw ->
+                                val filtered = raw.filter {
+                                    it.isDigit() || it == '.' || it == ',' ||
+                                        it == '+' || it == '-' || it == '−' ||
+                                        it == '*' || it == '×' || it == '/' || it == '÷'
+                                }
+                                onUpdatePart(part.key, part.copy(amountText = filtered))
+                            },
+                            label = { Text("Сумма") },
+                            suffix = { Text("₽") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = palette.accentBlue,
+                                unfocusedBorderColor = palette.outlineSubtle
+                            ),
+                            modifier = Modifier.weight(0.44f)
+                        )
+                        OutlinedTextField(
+                            value = part.note,
+                            onValueChange = { onUpdatePart(part.key, part.copy(note = it)) },
+                            label = { Text("Подпись") },
+                            placeholder = { Text("Необяз.") },
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = palette.accentBlue,
+                                unfocusedBorderColor = palette.outlineSubtle
+                            ),
+                            modifier = Modifier.weight(0.56f)
+                        )
+                    }
+                }
+            }
+        }
+
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = palette.surfaceElevated,
+            border = BorderStroke(1.dp, palette.outlineSubtle),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(onClick = onAddPart)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Add,
+                    contentDescription = null,
+                    tint = palette.accentBlue,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Добавить часть",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = palette.accentBlue
                 )
             }
         }

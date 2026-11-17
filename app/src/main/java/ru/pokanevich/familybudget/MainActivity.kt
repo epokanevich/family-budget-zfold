@@ -529,6 +529,8 @@ fun FamilyBudgetApp(
         val target = inspectingExpense!!
         ExpenseDetailSheet(
             expense = target,
+            allExpenses = confirmedExpenses,
+            onSelectExpense = { sibling -> inspectingExpense = sibling },
             onDismiss = { inspectingExpense = null },
             onEdit = { exp ->
                 inspectingExpense = null
@@ -594,6 +596,24 @@ fun FamilyBudgetApp(
                             )
                         )
                     }
+                    showAddEditSheet = false
+                    editingExpense = null
+                    prefilledAmount = ""
+                    prefilledMerchant = ""
+                }
+            },
+            onSaveSplit = { totalAmount, merchant, author, note, parts ->
+                val existing = editingExpense
+                scope.launch {
+                    repository.saveSplitExpenses(
+                        original = existing,
+                        parts = parts,
+                        totalAmountRub = totalAmount,
+                        merchant = merchant,
+                        authorName = author,
+                        note = note,
+                        sourceType = if (prefilledAmount.isNotEmpty()) "QR_RECEIPT" else "MANUAL"
+                    )
                     showAddEditSheet = false
                     editingExpense = null
                     prefilledAmount = ""

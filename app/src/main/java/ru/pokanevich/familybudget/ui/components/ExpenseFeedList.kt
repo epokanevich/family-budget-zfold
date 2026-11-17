@@ -568,6 +568,21 @@ private fun ExpenseTransactionRow(
                         modifier = Modifier.weight(1f, fill = false)
                     )
                 }
+                if (expense.splitGroupId.isNotBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(palette.accentBlueSoft)
+                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "Split",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.accentBlue
+                        )
+                    }
+                }
                 if (sourceTag != null) {
                     Box(
                         modifier = Modifier

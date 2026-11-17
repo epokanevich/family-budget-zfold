@@ -407,6 +407,31 @@ class BudgetRepository private constructor(context: Context) {
         requestCoalescedSync()
     }
 
+    suspend fun saveSplitExpenses(
+        original: ExpenseEntity?,
+        parts: List<SplitPartInput>,
+        totalAmountRub: Double,
+        merchant: String,
+        authorName: String,
+        note: String,
+        sourceType: String = "MANUAL"
+    ): List<ExpenseEntity> {
+        val entities = SplitExpenseBuilder.build(
+            original = original,
+            parts = parts,
+            totalAmountRub = totalAmountRub,
+            merchant = merchant,
+            authorName = authorName,
+            note = note,
+            sourceType = sourceType
+        )
+        db.withTransaction {
+            dao.upsertAll(entities)
+        }
+        requestCoalescedSync()
+        return entities
+    }
+
     suspend fun confirmPendingExpense(expense: ExpenseEntity, chosenCategory: ExpenseCategory) {
         val updated = expense.copy(
             categoryName = chosenCategory.name,
