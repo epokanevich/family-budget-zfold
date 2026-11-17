@@ -230,7 +230,7 @@ fun ExpensesFeedPane(
                 exp.category.displayName.lowercase().contains(q)
             val matchesFilter = when (activeFilter) {
                 FeedFilter.ALL -> true
-                FeedFilter.EXPENSES -> !exp.isIncome
+                FeedFilter.EXPENSES -> !exp.isIncome && !exp.isTransfer
                 FeedFilter.INCOMES -> exp.isIncome
                 FeedFilter.EUGENE -> exp.authorName.equals("Евгений", ignoreCase = true)
                 FeedFilter.ANZHELIKA -> exp.authorName.equals("Анжелика", ignoreCase = true)
@@ -246,7 +246,7 @@ fun ExpensesFeedPane(
             .entries
             .sortedByDescending { it.key }
             .map { entry ->
-                val dayExpenseSum = entry.value.filter { !it.isIncome }.sumOf { it.amountRub }
+                val dayExpenseSum = entry.value.filter { !it.isIncome && !it.isTransfer }.sumOf { it.amountRub }
                 val dayIncomeSum = entry.value.filter { it.isIncome }.sumOf { it.amountRub }
                 DayExpenseGroup(
                     dayKey = entry.key,

@@ -90,18 +90,20 @@ object AiBudgetAdvisor {
         monthlyBudgetRub: Double,
         window: PeriodWindow = PeriodCalculator.buildWindow(BudgetPeriod.MONTH, System.currentTimeMillis())
     ): AiBudgetReport {
-        val activeAll = expenses.filter { !it.isDeleted && !it.isPendingConfirmation }
+        val activeAll = expenses.filter {
+            !it.isDeleted && !it.isPendingConfirmation && !it.isTransfer
+        }
 
         // Общий баланс за всё время (как "Итого" в Money Manager)
         val allTimeIncome = activeAll.filter { it.isIncome }.sumOf { it.amountRub }
         val allTimeExpense = activeAll.filter { !it.isIncome }.sumOf { it.amountRub }
         val allTimeBalance = allTimeIncome - allTimeExpense
 
-        val periodItems = if (window.period == BudgetPeriod.ALL) {
+        val periodItems = (if (window.period == BudgetPeriod.ALL) {
             activeAll
         } else {
             activeAll.filter { it.createdAtEpochMs in window.startMs..window.endMs }
-        }
+        }).filter { !it.isTransfer }
 
         val periodExpenses = periodItems.filter { !it.isIncome }
         val periodIncomes = periodItems.filter { it.isIncome }

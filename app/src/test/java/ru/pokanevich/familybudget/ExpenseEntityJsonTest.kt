@@ -5,6 +5,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import ru.pokanevich.familybudget.data.ExpenseCategory
 import ru.pokanevich.familybudget.data.ExpenseEntity
+import ru.pokanevich.familybudget.data.OperationType
 
 class ExpenseEntityJsonTest {
 
@@ -143,6 +144,9 @@ class ExpenseEntityJsonTest {
         assertFalse(json.has("updatedAtEpochMs"))
         assertFalse(json.has("rawPushOrQrText"))
         assertFalse(json.has("dedupSignature"))
+        assertFalse(json.has("note"))
+        assertFalse(json.has("splitGroupId"))
+        assertFalse(json.has("operationType"))
 
         // Required fields must be present
         assertTrue(json.has("id"))
@@ -150,5 +154,152 @@ class ExpenseEntityJsonTest {
         assertTrue(json.has("merchant"))
         assertTrue(json.has("categoryName"))
         assertTrue(json.has("createdAtEpochMs"))
+    }
+
+    @Test
+    fun toJsonObject_omitsOperationTypeWhenMatchesCategoryDefault() {
+        val explicitExpense = ExpenseEntity(
+            id = "exp-explicit",
+            amountRub = 250.0,
+            merchant = "Аптека",
+            categoryName = ExpenseCategory.HEALTH.name,
+            operationType = OperationType.EXPENSE.name
+        )
+        val expJson = explicitExpense.toJsonObject()
+        assertFalse(expJson.has("operationType"))
+        assertEquals(OperationType.EXPENSE, explicitExpense.effectiveOperationType)
+        assertFalse(explicitExpense.isIncome)
+        assertFalse(explicitExpense.isTransfer)
+
+        val explicitIncome = ExpenseEntity(
+            id = "inc-explicit",
+            amountRub = 50_000.0,
+            merchant = "Зарплата",
+            categoryName = ExpenseCategory.INCOME_SALARY.name,
+            operationType = OperationType.INCOME.name
+        )
+        val incJson = explicitIncome.toJsonObject()
+        assertFalse(incJson.has("operationType"))
+        assertEquals(OperationType.INCOME, explicitIncome.effectiveOperationType)
+        assertTrue(explicitIncome.isIncome)
+        assertFalse(explicitIncome.isTransfer)
+    }
+
+    @Test
+    fun roundTrip_noteSplitGroupAndTransfer_restoresAllFields() {
+        val original = ExpenseEntity(
+            id = "transfer-uuid-1",
+            amountRub = 15_000.0,
+            merchant = "Перевод на накопительный счёт",
+            categoryName = ExpenseCategory.OTHER.name,
+            authorName = "Евгений",
+            createdAtEpochMs = 1700000000000L,
+            updatedAtEpochMs = 1700000000000L,
+            note = "Отпускная подушка",
+            splitGroupId = "split-group-abc",
+            operationType = OperationType.TRANSFER.name
+        )
+
+        val json = original.toJsonObject()
+        assertEquals("Отпускная подушка", json.getString("note"))
+        assertEquals("split-group-abc", json.getString("splitGroupId"))
+        assertEquals("TRANSFER", json.getString("operationType"))
+
+        val restored = ExpenseEntity.fromJsonObject(json)
+        assertNotNull(restored)
+        assertEquals(original.note, restored!!.note)
+        assertEquals(original.splitGroupId, restored.splitGroupId)
+        assertEquals("TRANSFER", restored.operationType)
+        assertEquals(OperationType.TRANSFER, restored.effectiveOperationType)
+        assertTrue(restored.isTransfer)
+        assertFalse(restored.isIncome)
+    }
+
+    @Test
+    fun roundTrip_transferWithIncomeCategory_remainsTransfer() {
+        val transfer = ExpenseEntity(
+            id = "transfer-inc-cat",
+            amountRub = 10_000.0,
+            merchant = "Между счетами",
+            categoryName = ExpenseCategory.INCOME_OTHER.name,
+            operationType = OperationType.TRANSFER.name
+        )
+
+        val json = transfer.toJsonObject()
+        assertEquals("TRANSFER", json.getString("operationType"))
+
+        val restored = ExpenseEntity.fromJsonObject(json)
+        assertNotNull(restored)
+        assertEquals(OperationType.TRANSFER, restored!!.effectiveOperationType)
+        assertTrue(restored.isTransfer)
+        assertFalse(restored.isIncome)
+    }
+
+    @Test
+    fun fromJsonObject_legacyJsonWithoutNewFields_usesSafeDefaults() {
+        val legacyExpenseJson = JSONObject().apply {
+            put("id", "legacy-exp-1")
+            put("amountRub", 630.0)
+            put("merchant", "Обед")
+            put("categoryName", ExpenseCategory.WORK_FOOD.name)
+            put("createdAtEpochMs", 1763297160000L)
+        }
+        val expense = ExpenseEntity.fromJsonObject(legacyExpenseJson)
+        assertNotNull(expense)
+        assertEquals("", expense!!.note)
+        assertEquals("", expense.splitGroupId)
+        assertEquals("", expense.operationType)
+        assertEquals(OperationType.EXPENSE, expense.effectiveOperationType)
+        assertFalse(expense.isIncome)
+        assertFalse(expense.isTransfer)
+        assertFalse(expense.toJsonObject().has("note"))
+        assertFalse(expense.toJsonObject().has("splitGroupId"))
+        assertFalse(expense.toJsonObject().has("operationType"))
+
+        val legacyIncomeJson = JSONObject().apply {
+            put("id", "legacy-inc-1")
+            put("amountRub", 95_000.0)
+            put("merchant", "Зарплата")
+            put("categoryName", ExpenseCategory.INCOME_SALARY.name)
+            put("createdAtEpochMs", 1763297160000L)
+        }
+        val income = ExpenseEntity.fromJsonObject(legacyIncomeJson)
+        assertNotNull(income)
+        assertEquals("", income!!.note)
+        assertEquals("", income.splitGroupId)
+        assertEquals("", income.operationType)
+        assertEquals(OperationType.INCOME, income.effectiveOperationType)
+        assertTrue(income.isIncome)
+        assertFalse(income.isTransfer)
+        assertFalse(income.toJsonObject().has("operationType"))
+    }
+
+    @Test
+    fun fromJsonObject_nullOrUnknownOperationType_fallsBackSafely() {
+        val jsonWithNulls = JSONObject().apply {
+            put("id", "null-fields-1")
+            put("amountRub", 400.0)
+            put("merchant", "Кофе")
+            put("categoryName", ExpenseCategory.CAFES.name)
+            put("note", JSONObject.NULL)
+            put("splitGroupId", JSONObject.NULL)
+            put("operationType", JSONObject.NULL)
+        }
+        val restoredNulls = ExpenseEntity.fromJsonObject(jsonWithNulls)
+        assertNotNull(restoredNulls)
+        assertEquals("", restoredNulls!!.note)
+        assertEquals("", restoredNulls.splitGroupId)
+        assertEquals("", restoredNulls.operationType)
+        assertEquals(OperationType.EXPENSE, restoredNulls.effectiveOperationType)
+
+        val unknownOp = ExpenseEntity(
+            id = "unknown-op-1",
+            amountRub = 100.0,
+            categoryName = ExpenseCategory.INCOME_GIFT.name,
+            operationType = "FUTURE_OP_TYPE"
+        )
+        assertEquals(OperationType.INCOME, unknownOp.effectiveOperationType)
+        assertTrue(unknownOp.isIncome)
+        assertFalse(unknownOp.isTransfer)
     }
 }
