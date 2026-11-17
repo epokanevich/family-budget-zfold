@@ -214,6 +214,14 @@ class BudgetRepository private constructor(context: Context) {
                             }
                         }
 
+                        val dedupedLosers = deduplicateCrossDevicePushExpenses(mergedMap)
+                        if (dedupedLosers.isNotEmpty()) {
+                            val loserIds = dedupedLosers.map { it.id }.toSet()
+                            toUpsertLocally.removeAll { it.id in loserIds }
+                            toUpsertLocally.addAll(dedupedLosers)
+                            needCloudPush = true
+                        }
+
                         if (toUpsertLocally.isNotEmpty()) {
                             dao.upsertAll(toUpsertLocally)
                         }
@@ -381,6 +389,60 @@ class BudgetRepository private constructor(context: Context) {
     }
 
     companion object {
+        private const val CROSS_DEVICE_DEDUP_WINDOW_MS = 90_000L
+
+        /**
+         * Кросс-девайс дедупликация: если на одном телефоне сработал Mir Pay (PUSH_MIRPAY),
+         * а на другом по той же привязанной карте пришёл пуш Сбера (PUSH_SBER) в пределах 90 сек
+         * на ту же сумму, оставляем одну запись (приоритет: подтверждённая, затем PUSH_MIRPAY),
+         * а вторую мягко удаляем (isDeleted = true).
+         */
+        internal fun deduplicateCrossDevicePushExpenses(
+            mergedMap: MutableMap<String, ExpenseEntity>,
+            nowMs: Long = System.currentTimeMillis()
+        ): List<ExpenseEntity> {
+            val candidatesBySig = mergedMap.values
+                .filter {
+                    !it.isDeleted &&
+                        it.dedupSignature.startsWith("AMT_") &&
+                        (it.sourceType == "PUSH_MIRPAY" || it.sourceType == "PUSH_SBER")
+                }
+                .groupBy { it.dedupSignature }
+
+            val deletedLosers = mutableListOf<ExpenseEntity>()
+            for ((_, group) in candidatesBySig) {
+                if (group.size < 2) continue
+                val sorted = group.sortedBy { it.createdAtEpochMs }
+                for (i in sorted.indices) {
+                    val first = mergedMap[sorted[i].id] ?: continue
+                    if (first.isDeleted) continue
+                    for (j in (i + 1) until sorted.size) {
+                        val second = mergedMap[sorted[j].id] ?: continue
+                        if (second.isDeleted) continue
+                        if (second.createdAtEpochMs - first.createdAtEpochMs > CROSS_DEVICE_DEDUP_WINDOW_MS) {
+                            break
+                        }
+                        if (first.sourceType == second.sourceType) continue
+
+                        val firstWins = when {
+                            first.isPendingConfirmation != second.isPendingConfirmation -> !first.isPendingConfirmation
+                            else -> first.sourceType == "PUSH_MIRPAY"
+                        }
+                        val loser = if (firstWins) second else first
+                        val updatedLoser = loser.copy(
+                            isDeleted = true,
+                            updatedAtEpochMs = maxOf(nowMs, loser.updatedAtEpochMs + 1L),
+                            isSynced = true
+                        )
+                        mergedMap[loser.id] = updatedLoser
+                        deletedLosers.add(updatedLoser)
+                        if (!firstWins) break
+                    }
+                }
+            }
+            return deletedLosers
+        }
+
         @Volatile
         private var INSTANCE: BudgetRepository? = null
 

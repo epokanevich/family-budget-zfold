@@ -12,8 +12,8 @@ android {
         applicationId = "ru.pokanevich.familybudget"
         minSdk = 26
         targetSdk = 34
-        versionCode = 9
-        versionName = "3.2.3"
+        versionCode = 10
+        versionName = "3.2.4"
 
         val syncToken = (System.getenv("SYNC_GITHUB_TOKEN") ?: "")
             .replace("\\", "\\\\")
