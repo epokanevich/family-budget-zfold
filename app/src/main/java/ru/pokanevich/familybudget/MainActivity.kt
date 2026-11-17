@@ -558,7 +558,9 @@ fun FamilyBudgetApp(
                                     note = note
                                 )
                             }
-                        }
+                        },
+                        allExpenses = confirmedExpenses,
+                        categoryRegistry = categoryRegistry
                     )
                 }
             }
@@ -633,7 +635,9 @@ fun FamilyBudgetApp(
                                     note = note
                                 )
                             }
-                        }
+                        },
+                        allExpenses = confirmedExpenses,
+                        categoryRegistry = categoryRegistry
                     )
                 }
             }

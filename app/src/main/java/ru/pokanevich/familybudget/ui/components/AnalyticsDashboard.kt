@@ -6,6 +6,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -43,28 +45,41 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import ru.pokanevich.familybudget.ai.AiBudgetAdvisor
 import ru.pokanevich.familybudget.ai.AiBudgetReport
 import ru.pokanevich.familybudget.ai.CategoryDiagnosis
 import ru.pokanevich.familybudget.data.CategoryDescriptor
+import ru.pokanevich.familybudget.data.CategoryRegistry
+import ru.pokanevich.familybudget.data.ExpenseEntity
+import ru.pokanevich.familybudget.data.MonthlyTrendCalculator
+import ru.pokanevich.familybudget.data.MonthlyTrendPoint
 import ru.pokanevich.familybudget.data.OperationType
 import ru.pokanevich.familybudget.data.RecurringPaymentEntity
 import ru.pokanevich.familybudget.data.RecurringPaymentScheduler
@@ -80,6 +95,8 @@ import ru.pokanevich.familybudget.ui.util.BudgetPeriod
 import ru.pokanevich.familybudget.ui.util.Formatters
 import ru.pokanevich.familybudget.ui.util.PeriodWindow
 import java.time.YearMonth
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 private data class ChartSlice(
@@ -108,6 +125,8 @@ fun AiAnalyticsPane(
     onOpenSavingsGoals: (() -> Unit)? = null,
     onSaveSavingsGoal: ((SavingsGoalEntity) -> Unit)? = null,
     onRecordGoalTransfer: ((SavingsGoalEntity, Double, Boolean, String, String) -> Unit)? = null,
+    allExpenses: List<ExpenseEntity> = emptyList(),
+    categoryRegistry: CategoryRegistry = CategoryRegistry.DEFAULT,
     modifier: Modifier = Modifier
 ) {
     val palette = LocalFamilyPalette.current
@@ -152,6 +171,12 @@ fun AiAnalyticsPane(
             onSelectCategory = { cat ->
                 selectedChartCategoryId = if (selectedChartCategoryId == cat.id) null else cat.id
             }
+        )
+
+        // 1.5. Monthly Trends Card (6 / 12 months, paired bars + balance/average line)
+        MonthlyTrendsCard(
+            allExpenses = allExpenses,
+            categoryRegistry = categoryRegistry
         )
 
         // 2. Category Pace & Limits Card
@@ -1388,4 +1413,567 @@ private fun DashboardGoalTile(
             }
         }
     }
+}
+
+@Composable
+fun MonthlyTrendsCard(
+    allExpenses: List<ExpenseEntity>,
+    categoryRegistry: CategoryRegistry,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalFamilyPalette.current
+    var monthsCount by rememberSaveable { mutableIntStateOf(6) }
+    var filterCategoryId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedMonthKey by remember { mutableStateOf<String?>(null) }
+
+    val trendPoints by produceState(
+        initialValue = emptyList<MonthlyTrendPoint>(),
+        key1 = allExpenses,
+        key2 = categoryRegistry,
+        key3 = Pair(monthsCount, filterCategoryId)
+    ) {
+        value = withContext(Dispatchers.Default) {
+            MonthlyTrendCalculator.calculate(
+                expenses = allExpenses,
+                registry = categoryRegistry,
+                monthsCount = monthsCount,
+                filterCategoryId = filterCategoryId
+            )
+        }
+    }
+
+    val selectedPoint = remember(trendPoints, selectedMonthKey) {
+        trendPoints.firstOrNull { it.yearMonthKey == selectedMonthKey }
+    }
+
+    val activeFilterCategory = remember(categoryRegistry, filterCategoryId) {
+        filterCategoryId?.let { categoryRegistry.resolve(it) }
+    }
+
+    val filterCategories = remember(categoryRegistry) {
+        categoryRegistry.expenseCategories + categoryRegistry.incomeCategories
+    }
+
+    val avgLineValue = remember(trendPoints, filterCategoryId, activeFilterCategory) {
+        if (trendPoints.isEmpty()) return@remember 0.0
+        if (filterCategoryId == null) {
+            trendPoints.map { it.netRub }.average()
+        } else {
+            val isIncomeCat = activeFilterCategory?.isIncome == true
+            val values = trendPoints.map { if (isIncomeCat) it.incomeRub else it.expenseRub }
+            val nonZero = values.filter { it > 0.0 }
+            if (nonZero.isNotEmpty()) nonZero.average() else 0.0
+        }
+    }
+
+    val hasAnyData = remember(trendPoints) {
+        trendPoints.any { it.expenseRub > 0.0 || it.incomeRub > 0.0 }
+    }
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = palette.surfaceCard,
+        border = BorderStroke(1.dp, palette.outlineSubtle)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Header + 6 мес / 12 мес toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(11.dp))
+                            .background(palette.accentBlueSoft),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Insights,
+                            contentDescription = null,
+                            tint = palette.accentBlue,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+                    Column {
+                        Text(
+                            text = "Динамика по месяцам",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = palette.textPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = activeFilterCategory?.let { "${it.emoji} ${it.displayName}" }
+                                ?: "Доходы, расходы и баланс",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Surface(
+                    shape = RoundedCornerShape(11.dp),
+                    color = palette.surfaceElevated
+                ) {
+                    Row(modifier = Modifier.padding(3.dp)) {
+                        listOf(6 to "6 мес", 12 to "12 мес").forEach { (count, title) ->
+                            val active = monthsCount == count
+                            Surface(
+                                shape = RoundedCornerShape(9.dp),
+                                color = if (active) palette.surfaceCard else Color.Transparent,
+                                shadowElevation = if (active && !palette.isDark) 1.dp else 0.dp,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(9.dp))
+                                    .clickable { monthsCount = count }
+                            ) {
+                                Text(
+                                    text = title,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (active) palette.textPrimary else palette.textSecondary,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Category filter chips ("Все расходы" vs selected category)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                val allActive = filterCategoryId == null
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (allActive) palette.accentBlueSoft else palette.surfaceElevated,
+                    border = if (allActive) BorderStroke(1.dp, palette.accentBlue) else null,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { filterCategoryId = null }
+                ) {
+                    Text(
+                        text = "Все расходы",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = if (allActive) FontWeight.Bold else FontWeight.Medium,
+                        color = if (allActive) palette.accentBlue else palette.textSecondary,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                }
+
+                filterCategories.forEach { cat ->
+                    val isSelected = filterCategoryId == cat.id
+                    val vis = cat.visual()
+                    val catColor = if (palette.isDark) vis.darkModeColor else vis.color
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (isSelected) catColor.copy(alpha = 0.16f) else palette.surfaceElevated,
+                        border = if (isSelected) BorderStroke(1.dp, catColor) else null,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable {
+                                filterCategoryId = if (isSelected) null else cat.id
+                            }
+                    ) {
+                        Text(
+                            text = "${cat.emoji} ${cat.shortName}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                            color = if (isSelected) catColor else palette.textSecondary,
+                            maxLines = 1,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+            }
+
+            // Legend row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (filterCategoryId == null || activeFilterCategory?.isIncome == true) {
+                    TrendLegendItem(color = palette.accentEmerald, label = "Доход", isLine = false)
+                }
+                if (filterCategoryId == null || activeFilterCategory?.isIncome == false) {
+                    TrendLegendItem(color = palette.accentCoral, label = "Расход", isLine = false)
+                }
+                TrendLegendItem(
+                    color = palette.accentBlue,
+                    label = if (filterCategoryId == null) "Баланс" else "Среднее",
+                    isLine = true
+                )
+            }
+
+            if (trendPoints.isEmpty() || !hasAnyData) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (filterCategoryId == null) {
+                            "Нет подтверждённых операций за выбранный период"
+                        } else {
+                            "Нет операций по выбранной категории за $monthsCount мес."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.textMuted,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                val incomeColor = palette.accentEmerald
+                val expenseColor = palette.accentCoral
+                val lineColor = palette.accentBlue
+                val gridColor = palette.outlineSubtle
+                val highlightBg = palette.accentBlue.copy(alpha = 0.09f)
+
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Canvas(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(168.dp)
+                            .pointerInput(trendPoints) {
+                                detectTapGestures { offset ->
+                                    if (trendPoints.isEmpty() || size.width <= 0) return@detectTapGestures
+                                    val idx = ((offset.x / size.width.toFloat()) * trendPoints.size)
+                                        .toInt()
+                                        .coerceIn(0, trendPoints.lastIndex)
+                                    val tappedKey = trendPoints[idx].yearMonthKey
+                                    selectedMonthKey = if (selectedMonthKey == tappedKey) null else tappedKey
+                                }
+                            }
+                    ) {
+                        val count = trendPoints.size
+                        if (count == 0) return@Canvas
+
+                        val topPad = 10.dp.toPx()
+                        val bottomPad = 6.dp.toPx()
+                        val plotHeight = (size.height - topPad - bottomPad).coerceAtLeast(1f)
+
+                        val maxBarValue = trendPoints.maxOf { max(it.incomeRub, it.expenseRub) }
+                        val maxLineValue = if (filterCategoryId == null) {
+                            trendPoints.maxOf { it.netRub }
+                        } else {
+                            avgLineValue
+                        }
+                        val minLineValue = if (filterCategoryId == null) {
+                            trendPoints.minOf { it.netRub }
+                        } else {
+                            0.0
+                        }
+
+                        val maxPositive = max(max(maxBarValue, maxLineValue), 1.0)
+                        val minVal = min(0.0, minLineValue)
+                        val totalRange = (maxPositive - minVal).coerceAtLeast(1.0)
+
+                        fun valueToY(value: Double): Float {
+                            val ratioFromTop = ((maxPositive - value) / totalRange).toFloat()
+                            return topPad + ratioFromTop * plotHeight
+                        }
+
+                        val zeroY = valueToY(0.0)
+
+                        // Horizontal guide lines
+                        val guideFractions = listOf(0f, 0.5f)
+                        guideFractions.forEach { frac ->
+                            val gy = topPad + (zeroY - topPad) * frac
+                            drawLine(
+                                color = gridColor.copy(alpha = 0.55f),
+                                start = Offset(0f, gy),
+                                end = Offset(size.width, gy),
+                                strokeWidth = 1.dp.toPx(),
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f), 0f)
+                            )
+                        }
+                        // Baseline at 0
+                        drawLine(
+                            color = gridColor,
+                            start = Offset(0f, zeroY),
+                            end = Offset(size.width, zeroY),
+                            strokeWidth = 1.2.dp.toPx()
+                        )
+
+                        val slotWidth = size.width / count.toFloat()
+                        val showPairedBars = filterCategoryId == null
+                        val barCorner = CornerRadius(3.dp.toPx(), 3.dp.toPx())
+                        val maxSingleBarWidth = if (count <= 6) 14.dp.toPx() else 8.dp.toPx()
+                        val barWidth = if (showPairedBars) {
+                            min(maxSingleBarWidth, slotWidth * 0.28f)
+                        } else {
+                            min(maxSingleBarWidth * 1.35f, slotWidth * 0.45f)
+                        }
+                        val barGap = if (showPairedBars) min(3.dp.toPx(), slotWidth * 0.06f) else 0f
+
+                        // Selected column highlight + bars
+                        trendPoints.forEachIndexed { idx, point ->
+                            val slotLeft = idx * slotWidth
+                            val centerX = slotLeft + slotWidth / 2f
+
+                            if (selectedMonthKey == point.yearMonthKey) {
+                                drawRoundRect(
+                                    color = highlightBg,
+                                    topLeft = Offset(slotLeft + 2.dp.toPx(), 0f),
+                                    size = Size((slotWidth - 4.dp.toPx()).coerceAtLeast(1f), size.height),
+                                    cornerRadius = CornerRadius(8.dp.toPx(), 8.dp.toPx())
+                                )
+                            }
+
+                            if (showPairedBars) {
+                                val pairWidth = barWidth * 2f + barGap
+                                val incLeft = centerX - pairWidth / 2f
+                                val expLeft = incLeft + barWidth + barGap
+
+                                if (point.incomeRub > 0.0) {
+                                    val incTop = valueToY(point.incomeRub)
+                                    val incHeight = (zeroY - incTop).coerceAtLeast(2.dp.toPx())
+                                    drawRoundRect(
+                                        color = incomeColor,
+                                        topLeft = Offset(incLeft, zeroY - incHeight),
+                                        size = Size(barWidth, incHeight),
+                                        cornerRadius = barCorner
+                                    )
+                                }
+                                if (point.expenseRub > 0.0) {
+                                    val expTop = valueToY(point.expenseRub)
+                                    val expHeight = (zeroY - expTop).coerceAtLeast(2.dp.toPx())
+                                    drawRoundRect(
+                                        color = expenseColor,
+                                        topLeft = Offset(expLeft, zeroY - expHeight),
+                                        size = Size(barWidth, expHeight),
+                                        cornerRadius = barCorner
+                                    )
+                                }
+                            } else {
+                                val isIncomeCat = activeFilterCategory?.isIncome == true
+                                val barValue = if (isIncomeCat) point.incomeRub else point.expenseRub
+                                val barColor = if (isIncomeCat) incomeColor else expenseColor
+                                if (barValue > 0.0) {
+                                    val barTop = valueToY(barValue)
+                                    val barHeight = (zeroY - barTop).coerceAtLeast(2.dp.toPx())
+                                    drawRoundRect(
+                                        color = barColor,
+                                        topLeft = Offset(centerX - barWidth / 2f, zeroY - barHeight),
+                                        size = Size(barWidth, barHeight),
+                                        cornerRadius = barCorner
+                                    )
+                                }
+                            }
+                        }
+
+                        // Overlay line: Balance line (all ops) OR Average dashed line (category filter)
+                        if (filterCategoryId == null) {
+                            val linePath = Path()
+                            val pointOffsets = ArrayList<Offset>(count)
+                            trendPoints.forEachIndexed { idx, point ->
+                                val x = idx * slotWidth + slotWidth / 2f
+                                val y = valueToY(point.netRub)
+                                pointOffsets.add(Offset(x, y))
+                                if (idx == 0) linePath.moveTo(x, y) else linePath.lineTo(x, y)
+                            }
+                            drawPath(
+                                path = linePath,
+                                color = lineColor,
+                                style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                            )
+                            pointOffsets.forEachIndexed { idx, pt ->
+                                val isSel = trendPoints[idx].yearMonthKey == selectedMonthKey
+                                drawCircle(
+                                    color = lineColor,
+                                    radius = if (isSel) 4.5.dp.toPx() else 3.dp.toPx(),
+                                    center = pt
+                                )
+                            }
+                        } else if (avgLineValue > 0.0) {
+                            val avgY = valueToY(avgLineValue)
+                            drawLine(
+                                color = lineColor,
+                                start = Offset(0f, avgY),
+                                end = Offset(size.width, avgY),
+                                strokeWidth = 2.dp.toPx(),
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f)
+                            )
+                        }
+                    }
+
+                    // Month labels row (also tappable)
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        trendPoints.forEach { point ->
+                            val isSelected = selectedMonthKey == point.yearMonthKey
+                            Text(
+                                text = point.label,
+                                fontSize = if (monthsCount <= 6) 11.sp else 10.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) palette.accentBlue else palette.textMuted,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                softWrap = false,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        selectedMonthKey = if (isSelected) null else point.yearMonthKey
+                                    }
+                                    .padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Exact values tooltip / hint for selected month
+                if (selectedPoint != null) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = palette.surfaceElevated,
+                        border = BorderStroke(1.dp, palette.outlineSubtle)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = formatTrendMonthTitle(selectedPoint.yearMonthKey),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = palette.textPrimary
+                                )
+                                if (filterCategoryId != null && avgLineValue > 0.0) {
+                                    Text(
+                                        text = "Среднее: ${Formatters.formatRub(avgLineValue)}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = palette.accentBlue,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "Доходы",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = palette.textMuted
+                                    )
+                                    Text(
+                                        text = Formatters.formatRub(selectedPoint.incomeRub, showKopecksIfAny = true),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = palette.accentEmerald
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(
+                                        text = "Расходы",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = palette.textMuted
+                                    )
+                                    Text(
+                                        text = Formatters.formatRub(selectedPoint.expenseRub, showKopecksIfAny = true),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = palette.accentCoral
+                                    )
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text(
+                                        text = "Баланс",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = palette.textMuted
+                                    )
+                                    val netSign = if (selectedPoint.netRub > 0.0) "+" else ""
+                                    Text(
+                                        text = "$netSign${Formatters.formatRub(selectedPoint.netRub, showKopecksIfAny = true)}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (selectedPoint.netRub >= 0.0) palette.accentBlue else palette.accentCoral
+                                    )
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        text = "Нажмите на месяц, чтобы увидеть точные суммы в ₽",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textMuted,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrendLegendItem(
+    color: Color,
+    label: String,
+    isLine: Boolean
+) {
+    val palette = LocalFamilyPalette.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        if (isLine) {
+            Box(
+                modifier = Modifier
+                    .width(12.dp)
+                    .height(2.5.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(color)
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(color)
+            )
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.textSecondary
+        )
+    }
+}
+
+private fun formatTrendMonthTitle(yearMonthKey: String): String {
+    val parts = yearMonthKey.split("-")
+    val year = parts.getOrNull(0)?.toIntOrNull() ?: return yearMonthKey
+    val month = parts.getOrNull(1)?.toIntOrNull() ?: return yearMonthKey
+    return Formatters.formatMonthTitle(year, (month - 1).coerceIn(0, 11))
 }
