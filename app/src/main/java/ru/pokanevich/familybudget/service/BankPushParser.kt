@@ -123,7 +123,7 @@ object BankPushParser {
         RegexOption.IGNORE_CASE
     )
     private val TRAILING_CARD_SUFFIX_REGEX = Regex(
-        "(?:[.\\s,;—–•]+(?:(?:по|с|со)\\s+)?(?:карте|карта|картой|сч[её]ту|сч[её]та|сч[её]т|black|all\\s+airlines|drive|platinum|mir|мир|visa|mastercard)\\s*[•*]*\\s*\\d{4}.*|[.\\s,;—–•]+[•*]+\\s*\\d{4}.*)$",
+        "(?:[.\\s,;—–•]+(?:(?:по|с|со)\\s+)?(?:карте|карта|картой|сч[её]ту|сч[её]та|сч[её]т|black|all\\s+airlines|drive|platinum|mir|мир|visa|mastercard)\\s*[•*]*\\s*\\d{4}[.\\s,;—–•]*|[.\\s,;—–•]+[•*]+\\s*\\d{4}[.\\s,;—–•]*)$",
         RegexOption.IGNORE_CASE
     )
     private val TRAILING_BONUS_SUFFIX_REGEX = Regex(
@@ -193,13 +193,13 @@ object BankPushParser {
 
     private fun cleanAfterAmount(rawAfterAmount: String): String {
         var cleaned = rawAfterAmount
-            .replace(TRAILING_BONUS_SUFFIX_REGEX, "")
-            .replace(TRAILING_CARD_SUFFIX_REGEX, "")
             .replace(LEADING_PUNCT_REGEX, "")
             .replace(LEADING_PREPOSITION_REGEX, "")
             .replace(LEADING_CARD_PREFIX_REGEX, "")
             .replace(LEADING_PUNCT_REGEX, "")
             .replace(LEADING_PREPOSITION_REGEX, "")
+            .replace(TRAILING_BONUS_SUFFIX_REGEX, "")
+            .replace(TRAILING_CARD_SUFFIX_REGEX, "")
             .replace(TRAILING_PUNCT_REGEX, "")
             .trim()
         if (CARD_ONLY_RESIDUE_REGEX.matches(cleaned)) {
