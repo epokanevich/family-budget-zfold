@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.BatterySaver
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Visibility
@@ -88,6 +89,7 @@ fun FamilySettingsSheet(
     onImportBackupUri: (Uri) -> Unit,
     onSyncNow: () -> Unit,
     onOpenCategoriesAndLimits: () -> Unit,
+    onOpenRecurringPayments: () -> Unit,
     onThemePreview: (AppThemeMode) -> Unit,
     onDismiss: () -> Unit,
     onSave: (String, String, Double, Boolean, String, AppThemeMode) -> Unit
@@ -221,6 +223,26 @@ fun FamilySettingsSheet(
                     Text(
                         text = "Категории и ориентиры расходов",
                         color = palette.accentEmerald,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onOpenRecurringPayments,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, palette.accentBlue),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Repeat,
+                        contentDescription = null,
+                        tint = palette.accentBlue,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Регулярные платежи и подписки",
+                        color = palette.accentBlue,
                         fontWeight = FontWeight.SemiBold
                     )
                 }

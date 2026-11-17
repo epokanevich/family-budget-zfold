@@ -106,6 +106,7 @@ import ru.pokanevich.familybudget.ui.sheets.AddEditExpenseSheet
 import ru.pokanevich.familybudget.ui.sheets.CategoriesAndLimitsSheet
 import ru.pokanevich.familybudget.ui.sheets.ExpenseDetailSheet
 import ru.pokanevich.familybudget.ui.sheets.FamilySettingsSheet
+import ru.pokanevich.familybudget.ui.sheets.RecurringPaymentsSheet
 import ru.pokanevich.familybudget.ui.theme.AppThemeMode
 import ru.pokanevich.familybudget.ui.theme.AuthorAvatarCircle
 import ru.pokanevich.familybudget.ui.theme.FamilyBudgetTheme
@@ -191,6 +192,7 @@ fun FamilyBudgetApp(
     val isSyncing by repository.isSyncing.collectAsState()
     val familyConfig by repository.familyConfig.collectAsState()
     val categoryRegistry by repository.categoryRegistry.collectAsState()
+    val recurringPayments by repository.recurringPayments.collectAsState(initial = emptyList())
 
     var currentUserName by remember { mutableStateOf(repository.prefs.currentUserName) }
     var familySpaceCode by remember { mutableStateOf(repository.prefs.familySpaceCode) }
@@ -212,6 +214,7 @@ fun FamilyBudgetApp(
     var showQrScanner by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showCategoriesAndLimitsSheet by remember { mutableStateOf(false) }
+    var showRecurringPaymentsSheet by remember { mutableStateOf(false) }
     var prefilledAmount by remember { mutableStateOf("") }
     var prefilledMerchant by remember { mutableStateOf("") }
     var isImportingBackup by remember { mutableStateOf(false) }
@@ -518,7 +521,9 @@ fun FamilyBudgetApp(
                         onPrevPeriod = { stepPeriod(-1) },
                         onNextPeriod = { stepPeriod(1) },
                         onJumpToCurrent = jumpToCurrent,
-                        onOpenSettings = { showSettingsSheet = true }
+                        onOpenSettings = { showSettingsSheet = true },
+                        recurringPayments = recurringPayments,
+                        onOpenRecurringPayments = { showRecurringPaymentsSheet = true }
                     )
                 }
             }
@@ -573,7 +578,9 @@ fun FamilyBudgetApp(
                         onPrevPeriod = { stepPeriod(-1) },
                         onNextPeriod = { stepPeriod(1) },
                         onJumpToCurrent = jumpToCurrent,
-                        onOpenSettings = { showSettingsSheet = true }
+                        onOpenSettings = { showSettingsSheet = true },
+                        recurringPayments = recurringPayments,
+                        onOpenRecurringPayments = { showRecurringPaymentsSheet = true }
                     )
                 }
             }
@@ -769,6 +776,7 @@ fun FamilyBudgetApp(
                 scope.launch { repository.syncWithCloudNow() }
             },
             onOpenCategoriesAndLimits = { showCategoriesAndLimitsSheet = true },
+            onOpenRecurringPayments = { showRecurringPaymentsSheet = true },
             onThemePreview = onThemeModeChange,
             onDismiss = { showSettingsSheet = false },
             onSave = { newName, newCode, newBudget, newAutoConfirm, newApiKey, newTheme ->
@@ -804,6 +812,26 @@ fun FamilyBudgetApp(
                 repository.updateCategories(updatedCategories)
             },
             onDismiss = { showCategoriesAndLimitsSheet = false }
+        )
+    }
+
+    if (showRecurringPaymentsSheet) {
+        RecurringPaymentsSheet(
+            recurringPayments = recurringPayments,
+            categoryRegistry = categoryRegistry,
+            onSavePayment = { payment ->
+                scope.launch { repository.upsertRecurringPayment(payment) }
+            },
+            onToggleActive = { payment, active ->
+                scope.launch { repository.toggleRecurringPaymentActive(payment, active) }
+            },
+            onSetPaidForCurrentMonth = { payment, paid ->
+                scope.launch { repository.setRecurringPaymentPaidForCurrentMonth(payment, paid) }
+            },
+            onDeletePayment = { payment ->
+                scope.launch { repository.softDeleteRecurringPayment(payment) }
+            },
+            onDismiss = { showRecurringPaymentsSheet = false }
         )
     }
 }

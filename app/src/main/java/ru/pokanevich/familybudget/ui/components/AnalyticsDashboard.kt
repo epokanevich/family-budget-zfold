@@ -24,8 +24,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.PieChart
+import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -57,6 +59,9 @@ import ru.pokanevich.familybudget.ai.AiBudgetAdvisor
 import ru.pokanevich.familybudget.ai.AiBudgetReport
 import ru.pokanevich.familybudget.ai.CategoryDiagnosis
 import ru.pokanevich.familybudget.data.CategoryDescriptor
+import ru.pokanevich.familybudget.data.OperationType
+import ru.pokanevich.familybudget.data.RecurringPaymentEntity
+import ru.pokanevich.familybudget.data.RecurringPaymentScheduler
 import ru.pokanevich.familybudget.ui.theme.AuthorAvatarCircle
 import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
@@ -64,6 +69,7 @@ import ru.pokanevich.familybudget.ui.theme.visual
 import ru.pokanevich.familybudget.ui.util.BudgetPeriod
 import ru.pokanevich.familybudget.ui.util.Formatters
 import ru.pokanevich.familybudget.ui.util.PeriodWindow
+import java.time.YearMonth
 import kotlin.math.roundToInt
 
 private data class ChartSlice(
@@ -84,6 +90,8 @@ fun AiAnalyticsPane(
     onNextPeriod: () -> Unit,
     onJumpToCurrent: () -> Unit,
     onOpenSettings: () -> Unit,
+    recurringPayments: List<RecurringPaymentEntity> = emptyList(),
+    onOpenRecurringPayments: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val palette = LocalFamilyPalette.current
@@ -133,6 +141,13 @@ fun AiAnalyticsPane(
 
         // 3. Family Member Contribution & Cumulative Balance Card
         CoupleContributionCard(report = report)
+
+        if (onOpenRecurringPayments != null) {
+            RecurringPaymentsAnalyticsCard(
+                recurringPayments = recurringPayments,
+                onClick = onOpenRecurringPayments
+            )
+        }
 
         // 4. AI Financial Verdict & Gemini Advisor Card
         Surface(
@@ -888,6 +903,88 @@ private fun MemberStatBox(
                 style = MaterialTheme.typography.labelSmall,
                 color = accentColor,
                 fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
+@Composable
+private fun RecurringPaymentsAnalyticsCard(
+    recurringPayments: List<RecurringPaymentEntity>,
+    onClick: () -> Unit
+) {
+    val palette = LocalFamilyPalette.current
+    val currentMonthKey = RecurringPaymentScheduler.periodKeyFor(YearMonth.now())
+    val active = remember(recurringPayments) {
+        recurringPayments.filter { !it.isDeleted && it.isActive }
+    }
+    val activeExpenses = remember(active) {
+        active.filter { it.effectiveOperationType == OperationType.EXPENSE }
+    }
+    val pendingExpenses = remember(activeExpenses, currentMonthKey) {
+        activeExpenses.filter { !it.isPaidInPeriod(currentMonthKey) }
+    }
+    val pendingSum = pendingExpenses.sumOf { it.amountRub }
+
+    val subtitleText = when {
+        active.isEmpty() -> "Добавьте подписки, ЖКХ или зарплату"
+        pendingExpenses.isNotEmpty() ->
+            "Активных: ${active.size} • Ожидается: ${pendingExpenses.size} (${Formatters.formatRub(pendingSum, true)})"
+        else -> "Активных: ${active.size} • В этом месяце всё оплачено ✓"
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp),
+        color = palette.surfaceCard,
+        border = BorderStroke(1.dp, palette.outlineSubtle)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(palette.accentEmeraldSoft),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Repeat,
+                    contentDescription = null,
+                    tint = palette.accentEmerald,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = "Регулярные платежи",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = palette.textPrimary
+                )
+                Text(
+                    text = subtitleText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (pendingExpenses.isNotEmpty()) palette.accentAmber else palette.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                imageVector = Icons.Rounded.ChevronRight,
+                contentDescription = "Открыть регулярные платежи",
+                tint = palette.textMuted,
+                modifier = Modifier.size(22.dp)
             )
         }
     }

@@ -5,14 +5,15 @@ import org.json.JSONObject
 
 /**
  * Общие семейные настройки, синхронизируемые в `families/<CODE>/config_v1.json`.
- * Слияние выполняется по-элементно (отдельный timestamp у бюджета и у каждой категории),
- * чтобы одновременные правки бюджета на одном телефоне и категорий на другом не затирали друг друга.
+ * Слияние выполняется по-элементно (отдельный timestamp у бюджета, каждой категории и каждого
+ * регулярного платежа), чтобы одновременные правки на двух телефонах не затирали друг друга.
  */
 data class FamilyConfig(
     val schemaVersion: Int = CURRENT_SCHEMA_VERSION,
     val monthlyBudgetRub: Double = DEFAULT_MONTHLY_BUDGET_RUB,
     val budgetUpdatedAtEpochMs: Long = 0L,
-    val categories: List<CategoryDescriptor> = emptyList()
+    val categories: List<CategoryDescriptor> = emptyList(),
+    val recurringPayments: List<RecurringPaymentEntity> = emptyList()
 ) {
     fun toRegistry(): CategoryRegistry = CategoryRegistry(categories)
 
@@ -20,35 +21,94 @@ data class FamilyConfig(
         put("schemaVersion", schemaVersion)
         put("monthlyBudgetRub", monthlyBudgetRub)
         put("budgetUpdatedAtEpochMs", budgetUpdatedAtEpochMs)
-        val arr = JSONArray()
+        val categoriesArr = JSONArray()
         for (category in categories.filter { it.id.isNotBlank() }.sortedBy { it.id }) {
-            arr.put(category.toJsonObject())
+            categoriesArr.put(category.toJsonObject())
         }
-        put("categories", arr)
+        put("categories", categoriesArr)
+        val recurringArr = JSONArray()
+        for (payment in recurringPayments.filter { it.id.isNotBlank() }.sortedBy { it.id }) {
+            recurringArr.put(payment.toJsonObject())
+        }
+        put("recurringPayments", recurringArr)
     }
 
     fun isEquivalentTo(other: FamilyConfig): Boolean {
         return schemaVersion == other.schemaVersion &&
             monthlyBudgetRub == other.monthlyBudgetRub &&
             budgetUpdatedAtEpochMs == other.budgetUpdatedAtEpochMs &&
-            normalizedCategoriesMap() == other.normalizedCategoriesMap()
-    }
-
-    private fun normalizedCategoriesMap(): Map<String, CategoryDescriptor> {
-        val map = LinkedHashMap<String, CategoryDescriptor>()
-        for (item in categories) {
-            if (item.id.isBlank()) continue
-            val existing = map[item.id]
-            if (existing == null || item.updatedAtEpochMs >= existing.updatedAtEpochMs) {
-                map[item.id] = item
-            }
-        }
-        return map
+            normalizeById(categories, { it.id }, { it.updatedAtEpochMs }) ==
+            normalizeById(other.categories, { it.id }, { it.updatedAtEpochMs }) &&
+            normalizeById(recurringPayments, { it.id }, { it.updatedAtEpochMs }) ==
+            normalizeById(other.recurringPayments, { it.id }, { it.updatedAtEpochMs })
     }
 
     companion object {
         const val CURRENT_SCHEMA_VERSION = 1
         const val DEFAULT_MONTHLY_BUDGET_RUB = 200_000.0
+
+        private fun <T> normalizeById(
+            source: List<T>,
+            idOf: (T) -> String,
+            updatedAtOf: (T) -> Long
+        ): Map<String, T> {
+            val map = LinkedHashMap<String, T>()
+            for (item in source) {
+                val id = idOf(item)
+                if (id.isBlank()) continue
+                val existing = map[id]
+                if (existing == null || updatedAtOf(item) >= updatedAtOf(existing)) {
+                    map[id] = item
+                }
+            }
+            return map
+        }
+
+        private fun <T> mergeById(
+            local: List<T>,
+            remote: List<T>,
+            idOf: (T) -> String,
+            updatedAtOf: (T) -> Long
+        ): List<T> {
+            val merged = LinkedHashMap<String, T>()
+            fun collect(source: List<T>) {
+                for (item in source) {
+                    val id = idOf(item)
+                    if (id.isBlank()) continue
+                    val current = merged[id]
+                    if (current == null || updatedAtOf(item) >= updatedAtOf(current)) {
+                        merged[id] = item
+                    }
+                }
+            }
+            collect(local)
+            collect(remote)
+            return merged.entries.sortedBy { it.key }.map { it.value }
+        }
+
+        private fun <T> parseJsonArrayDeduped(
+            arr: JSONArray?,
+            parseItem: (JSONObject) -> T?,
+            idOf: (T) -> String,
+            updatedAtOf: (T) -> Long
+        ): List<T> {
+            if (arr == null) return emptyList()
+            val parsedItems = ArrayList<T>(arr.length())
+            for (i in 0 until arr.length()) {
+                val itemObj = arr.optJSONObject(i) ?: continue
+                parseItem(itemObj)?.let { parsedItems.add(it) }
+            }
+            return normalizeById(parsedItems, idOf, updatedAtOf)
+                .entries
+                .sortedBy { it.key }
+                .map { it.value }
+        }
+
+        fun mergeRecurringPayments(
+            local: List<RecurringPaymentEntity>,
+            remote: List<RecurringPaymentEntity>
+        ): List<RecurringPaymentEntity> =
+            mergeById(local, remote, { it.id }, { it.updatedAtEpochMs })
 
         fun fromJsonString(raw: String): FamilyConfig? {
             if (raw.isBlank()) return null
@@ -58,7 +118,8 @@ data class FamilyConfig(
         fun fromJsonObject(obj: JSONObject): FamilyConfig? {
             val hasRecognizedField = obj.has("schemaVersion") ||
                 obj.has("monthlyBudgetRub") ||
-                obj.has("categories")
+                obj.has("categories") ||
+                obj.has("recurringPayments")
             if (!hasRecognizedField) return null
 
             val schemaVersion = if (obj.has("schemaVersion") && !obj.isNull("schemaVersion")) {
@@ -84,24 +145,26 @@ data class FamilyConfig(
                 0L
             }
 
-            val dedupedCategories = LinkedHashMap<String, CategoryDescriptor>()
-            val arr = obj.optJSONArray("categories")
-            if (arr != null) {
-                for (i in 0 until arr.length()) {
-                    val itemObj = arr.optJSONObject(i) ?: continue
-                    val parsed = CategoryDescriptor.fromJsonObject(itemObj) ?: continue
-                    val existing = dedupedCategories[parsed.id]
-                    if (existing == null || parsed.updatedAtEpochMs >= existing.updatedAtEpochMs) {
-                        dedupedCategories[parsed.id] = parsed
-                    }
-                }
-            }
+            val categories = parseJsonArrayDeduped(
+                arr = obj.optJSONArray("categories"),
+                parseItem = CategoryDescriptor::fromJsonObject,
+                idOf = { it.id },
+                updatedAtOf = { it.updatedAtEpochMs }
+            )
+
+            val recurringPayments = parseJsonArrayDeduped(
+                arr = obj.optJSONArray("recurringPayments"),
+                parseItem = RecurringPaymentEntity::fromJsonObject,
+                idOf = { it.id },
+                updatedAtOf = { it.updatedAtEpochMs }
+            )
 
             return FamilyConfig(
                 schemaVersion = schemaVersion,
                 monthlyBudgetRub = monthlyBudgetRub,
                 budgetUpdatedAtEpochMs = budgetUpdatedAtEpochMs,
-                categories = dedupedCategories.values.sortedBy { it.id }
+                categories = categories,
+                recurringPayments = recurringPayments
             )
         }
 
@@ -109,7 +172,8 @@ data class FamilyConfig(
          * Детерминированное слияние локального и удалённого конфига:
          * - `monthlyBudgetRub` выбирается по большему `budgetUpdatedAtEpochMs` (при равенстве — `remote`);
          * - `categories` сливаются по `id` и большему `updatedAtEpochMs` (при равенстве — `remote`);
-         * - удаление/скрытие категорий только мягкое через `isArchived = true` + `updatedAtEpochMs`.
+         * - `recurringPayments` сливаются по `id` и большему `updatedAtEpochMs` (при равенстве — `remote`);
+         * - удаление категорий/платежей только мягкое через `isArchived = true` / `isDeleted = true` + `updatedAtEpochMs`.
          */
         fun merge(local: FamilyConfig, remote: FamilyConfig): FamilyConfig {
             val mergedSchemaVersion = maxOf(local.schemaVersion, remote.schemaVersion)
@@ -124,31 +188,23 @@ data class FamilyConfig(
                     remote.monthlyBudgetRub to remote.budgetUpdatedAtEpochMs
             }
 
-            val mergedCategories = LinkedHashMap<String, CategoryDescriptor>()
-            fun collect(source: List<CategoryDescriptor>) {
-                for (item in source) {
-                    if (item.id.isBlank()) continue
-                    val current = mergedCategories[item.id]
-                    val shouldReplace = when {
-                        current == null -> true
-                        item.updatedAtEpochMs > current.updatedAtEpochMs -> true
-                        item.updatedAtEpochMs < current.updatedAtEpochMs -> false
-                        else -> true
-                    }
-                    if (shouldReplace) {
-                        mergedCategories[item.id] = item
-                    }
-                }
-            }
-
-            collect(local.categories)
-            collect(remote.categories)
+            val mergedCategories = mergeById(
+                local = local.categories,
+                remote = remote.categories,
+                idOf = { it.id },
+                updatedAtOf = { it.updatedAtEpochMs }
+            )
+            val mergedRecurring = mergeRecurringPayments(
+                local = local.recurringPayments,
+                remote = remote.recurringPayments
+            )
 
             return FamilyConfig(
                 schemaVersion = mergedSchemaVersion,
                 monthlyBudgetRub = mergedBudget,
                 budgetUpdatedAtEpochMs = mergedBudgetUpdatedAt,
-                categories = mergedCategories.values.sortedBy { it.id }
+                categories = mergedCategories,
+                recurringPayments = mergedRecurring
             )
         }
     }

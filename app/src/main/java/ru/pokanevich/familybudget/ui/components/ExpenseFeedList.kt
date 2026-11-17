@@ -54,6 +54,7 @@ import ru.pokanevich.familybudget.ai.AiBudgetReport
 import ru.pokanevich.familybudget.data.CategoryDescriptor
 import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
+import ru.pokanevich.familybudget.data.RecurringPaymentScheduler
 import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
 import ru.pokanevich.familybudget.ui.util.BudgetPeriod
@@ -300,6 +301,17 @@ fun ExpensesFeedPane(
         }
 
         if (pendingPushExpenses.isNotEmpty()) {
+            val allRecurring = pendingPushExpenses.all {
+                it.sourceType == RecurringPaymentScheduler.SOURCE_TYPE_RECURRING
+            }
+            val anyRecurring = pendingPushExpenses.any {
+                it.sourceType == RecurringPaymentScheduler.SOURCE_TYPE_RECURRING
+            }
+            val pendingHeaderTitle = when {
+                allRecurring -> "Регулярные к подтверждению"
+                anyRecurring -> "На подтверждение"
+                else -> "Новые из банка"
+            }
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -307,7 +319,7 @@ fun ExpensesFeedPane(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Новые из банка",
+                        text = pendingHeaderTitle,
                         style = MaterialTheme.typography.titleSmall,
                         color = palette.textPrimary
                     )
@@ -492,6 +504,7 @@ private fun ExpenseTransactionRow(
         "PUSH_SBER" -> "Сбер"
         "PUSH_MIRPAY" -> "Mir Pay"
         "QR_RECEIPT" -> "Чек ФНС"
+        RecurringPaymentScheduler.SOURCE_TYPE_RECURRING -> "Подписка"
         else -> null
     }
 

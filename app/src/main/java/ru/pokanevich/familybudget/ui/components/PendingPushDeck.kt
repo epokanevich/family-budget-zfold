@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
+import ru.pokanevich.familybudget.data.RecurringPaymentScheduler
 import ru.pokanevich.familybudget.ui.theme.CategorySymbol
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
 import ru.pokanevich.familybudget.ui.theme.visual
@@ -192,9 +193,25 @@ fun PendingPushCard(
         mutableStateOf(registry.resolve(expense.categoryName).id)
     }
     val isMirPay = expense.sourceType == "PUSH_MIRPAY"
-    val bankBg = if (isMirPay) palette.accentBlueSoft else palette.accentEmeraldSoft
-    val bankFg = if (isMirPay) palette.accentBlue else palette.accentEmerald
-    val bankLabel = if (isMirPay) "Mir Pay" else "СберБанк"
+    val isRecurring = expense.sourceType == RecurringPaymentScheduler.SOURCE_TYPE_RECURRING
+    val isIncome = expense.isIncome(registry)
+    val isTransfer = expense.isTransfer(registry)
+    val bankBg = when {
+        isRecurring -> palette.accentAmberSoft
+        isMirPay -> palette.accentBlueSoft
+        else -> palette.accentEmeraldSoft
+    }
+    val bankFg = when {
+        isRecurring -> palette.accentAmber
+        isMirPay -> palette.accentBlue
+        else -> palette.accentEmerald
+    }
+    val bankLabel = when {
+        isRecurring -> "Регулярный"
+        isMirPay -> "Mir Pay"
+        else -> "СберБанк"
+    }
+    val chipCategories = if (isIncome) registry.incomeCategories else registry.expenseCategories
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -237,55 +254,75 @@ fun PendingPushCard(
                     )
                 }
 
+                val formattedAmount = Formatters.formatRub(expense.amountRub, showKopecksIfAny = true)
                 Text(
-                    text = Formatters.formatRub(expense.amountRub, showKopecksIfAny = true),
+                    text = if (isIncome) "+$formattedAmount" else formattedAmount,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.ExtraBold,
-                    color = palette.textPrimary
+                    color = if (isIncome) palette.accentEmerald else palette.textPrimary
                 )
             }
 
-            Text(
-                text = expense.merchant,
-                style = MaterialTheme.typography.titleMedium,
-                color = palette.textPrimary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = expense.merchant,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = palette.textPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (isRecurring && expense.note.isNotBlank()) {
+                    Text(
+                        text = expense.note,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
 
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(registry.expenseCategories, key = { it.id }) { cat ->
-                    val vis = cat.visual()
-                    val tint = if (palette.isDark) vis.darkModeColor else vis.color
-                    val selected = selectedCategoryId == cat.id
+            if (isTransfer) {
+                Text(
+                    text = "Перевод между своими счетами (не учитывается в расходах)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = palette.accentBlue
+                )
+            } else {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    items(chipCategories, key = { it.id }) { cat ->
+                        val vis = cat.visual()
+                        val tint = if (palette.isDark) vis.darkModeColor else vis.color
+                        val selected = selectedCategoryId == cat.id
 
-                    Surface(
-                        shape = RoundedCornerShape(11.dp),
-                        color = if (selected) tint.copy(alpha = 0.16f) else palette.surfaceElevated,
-                        border = if (selected) BorderStroke(1.2.dp, tint) else null,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(11.dp))
-                            .clickable { selectedCategoryId = cat.id }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        Surface(
+                            shape = RoundedCornerShape(11.dp),
+                            color = if (selected) tint.copy(alpha = 0.16f) else palette.surfaceElevated,
+                            border = if (selected) BorderStroke(1.2.dp, tint) else null,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(11.dp))
+                                .clickable { selectedCategoryId = cat.id }
                         ) {
-                            CategorySymbol(
-                                visual = vis,
-                                contentDescription = null,
-                                tint = if (selected) tint else palette.textSecondary,
-                                iconSize = 15.dp
-                            )
-                            Text(
-                                text = cat.shortName,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (selected) tint else palette.textSecondary,
-                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
-                            )
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                CategorySymbol(
+                                    visual = vis,
+                                    contentDescription = null,
+                                    tint = if (selected) tint else palette.textSecondary,
+                                    iconSize = 15.dp
+                                )
+                                Text(
+                                    text = cat.shortName,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (selected) tint else palette.textSecondary,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                )
+                            }
                         }
                     }
                 }

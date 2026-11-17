@@ -64,10 +64,12 @@ class BudgetRepository private constructor(context: Context) {
 
     private val db = AppDatabase.getInstance(context)
     private val dao = db.expenseDao()
+    private val recurringDao = db.recurringPaymentDao()
     val prefs = FamilyPreferences(context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val syncMutex = Mutex()
     private val ingestMutex = Mutex()
+    private val recurringMutex = Mutex()
     private val configLock = Any()
     private var pollingJob: Job? = null
 
@@ -106,20 +108,32 @@ class BudgetRepository private constructor(context: Context) {
 
     val confirmedExpenses: Flow<List<ExpenseEntity>> = dao.observeConfirmedExpenses()
     val pendingPushExpenses: Flow<List<ExpenseEntity>> = dao.observePendingPushExpenses()
+    val recurringPayments: Flow<List<RecurringPaymentEntity>> = recurringDao.observeRecurringPayments()
 
     init {
+        scope.launch {
+            reconcileAndProcessRecurringOnStartup()
+        }
         startRealtimeSync()
     }
 
     /**
      * Переключает частоту фонового поллинга GitHub API в зависимости от жизненного цикла UI:
      * на активном экране — каждые 15 секунд, в фоне — раз в 3 минуты (при переходе в foreground
-     * цикл пробуждается немедленно).
+     * цикл пробуждается немедленно и проверяет наступившие регулярные платежи).
      */
     fun setForegroundActive(active: Boolean) {
         val previous = isForegroundActive
         isForegroundActive = active
         if (active && !previous) {
+            scope.launch {
+                val changed = recurringMutex.withLock {
+                    evaluateAndPersistRecurringLocked()
+                }
+                if (changed) {
+                    requestCoalescedSync()
+                }
+            }
             foregroundWakeupSignal.trySend(Unit)
         }
     }
@@ -319,11 +333,20 @@ class BudgetRepository private constructor(context: Context) {
         }
 
         // 1. Строго сначала синхронизируем config_v1.json, чтобы новые кастомные категории
-        // всегда приезжали раньше операций из budget_v3.json.
+        // и шаблоны регулярных платежей всегда приезжали раньше операций из budget_v3.json.
         syncConfigCycle(familyCode, token)
+        mirrorConfigRecurringToRoom()
 
         // 2. Затем синхронизируем операции в budget_v3.json.
         syncExpensesCycle(familyCode, token)
+
+        // 3. Проверяем наступившие регулярные платежи уже на свежей базе (без дублей с другим телефоном).
+        val recurringChanged = recurringMutex.withLock {
+            evaluateAndPersistRecurringLocked()
+        }
+        if (recurringChanged) {
+            requestCoalescedSync()
+        }
 
         return SyncState.CLOUD_CONNECTED
     }
@@ -776,7 +799,7 @@ class BudgetRepository private constructor(context: Context) {
     }
 
     suspend fun addOrUpdateExpense(expense: ExpenseEntity) {
-        val now = System.currentTimeMillis()
+        val now = maxOf(System.currentTimeMillis(), expense.updatedAtEpochMs + 1L)
         val toSave = expense.copy(
             updatedAtEpochMs = now,
             isSynced = false
@@ -814,7 +837,7 @@ class BudgetRepository private constructor(context: Context) {
         val updated = expense.copy(
             categoryName = categoryId,
             isPendingConfirmation = false,
-            updatedAtEpochMs = System.currentTimeMillis(),
+            updatedAtEpochMs = maxOf(System.currentTimeMillis(), expense.updatedAtEpochMs + 1L),
             isSynced = false
         )
         dao.upsert(updated)
@@ -824,7 +847,7 @@ class BudgetRepository private constructor(context: Context) {
     suspend fun softDeleteExpense(expense: ExpenseEntity) {
         val deleted = expense.copy(
             isDeleted = true,
-            updatedAtEpochMs = System.currentTimeMillis(),
+            updatedAtEpochMs = maxOf(System.currentTimeMillis(), expense.updatedAtEpochMs + 1L),
             isSynced = false
         )
         dao.upsert(deleted)
@@ -834,11 +857,192 @@ class BudgetRepository private constructor(context: Context) {
     suspend fun restoreExpense(expense: ExpenseEntity) {
         val restored = expense.copy(
             isDeleted = false,
-            updatedAtEpochMs = System.currentTimeMillis(),
+            updatedAtEpochMs = maxOf(System.currentTimeMillis(), expense.updatedAtEpochMs + 1L),
             isSynced = false
         )
         dao.upsert(restored)
         requestCoalescedSync()
+    }
+
+    suspend fun upsertRecurringPayment(payment: RecurringPaymentEntity) {
+        if (payment.id.isBlank()) return
+        recurringMutex.withLock {
+            val saved = synchronized(configLock) {
+                val current = _familyConfig.value
+                val existing = current.recurringPayments.firstOrNull { it.id == payment.id }
+                val maxExistingTs = current.recurringPayments.maxOfOrNull { it.updatedAtEpochMs } ?: 0L
+                val now = maxOf(
+                    System.currentTimeMillis(),
+                    maxExistingTs + 1L,
+                    (existing?.updatedAtEpochMs ?: 0L) + 1L,
+                    payment.updatedAtEpochMs
+                )
+                val normalized = payment.copy(
+                    title = payment.title.trim(),
+                    categoryId = payment.categoryId.ifBlank { ExpenseCategory.OTHER.name },
+                    operationType = payment.effectiveOperationType.name,
+                    dayOfMonth = payment.dayOfMonth.coerceIn(1, 31),
+                    updatedAtEpochMs = now
+                )
+                val updatedList = FamilyConfig.mergeRecurringPayments(
+                    local = current.recurringPayments,
+                    remote = listOf(normalized)
+                )
+                applyLocalConfigLocked(
+                    current.copy(recurringPayments = updatedList),
+                    hasUnsynced = true
+                )
+                normalized
+            }
+            recurringDao.upsert(saved)
+            evaluateAndPersistRecurringLocked()
+        }
+        requestCoalescedSync()
+    }
+
+    suspend fun toggleRecurringPaymentActive(payment: RecurringPaymentEntity, active: Boolean) {
+        upsertRecurringPayment(payment.copy(isActive = active))
+    }
+
+    suspend fun setRecurringPaymentPaidForCurrentMonth(
+        payment: RecurringPaymentEntity,
+        paid: Boolean
+    ) {
+        val changed = recurringMutex.withLock {
+            val updated = synchronized(configLock) {
+                val current = _familyConfig.value
+                val latest = current.recurringPayments.firstOrNull { it.id == payment.id } ?: payment
+                val now = maxOf(System.currentTimeMillis(), latest.updatedAtEpochMs + 1L)
+                val nextPayment = if (paid) {
+                    RecurringPaymentScheduler.markPaidForMonth(latest, nowMs = now)
+                } else {
+                    RecurringPaymentScheduler.clearPaidForMonth(latest, nowMs = now)
+                }
+                if (nextPayment == latest) return@synchronized null
+                val updatedList = FamilyConfig.mergeRecurringPayments(
+                    local = current.recurringPayments,
+                    remote = listOf(nextPayment)
+                )
+                applyLocalConfigLocked(
+                    current.copy(recurringPayments = updatedList),
+                    hasUnsynced = true
+                )
+                nextPayment
+            } ?: return@withLock false
+            recurringDao.upsert(updated)
+            true
+        }
+        if (changed) {
+            requestCoalescedSync()
+        }
+    }
+
+    suspend fun softDeleteRecurringPayment(payment: RecurringPaymentEntity) {
+        recurringMutex.withLock {
+            val deleted = synchronized(configLock) {
+                val current = _familyConfig.value
+                val latest = current.recurringPayments.firstOrNull { it.id == payment.id } ?: payment
+                val now = maxOf(System.currentTimeMillis(), latest.updatedAtEpochMs + 1L)
+                val nextPayment = latest.copy(
+                    isActive = false,
+                    isDeleted = true,
+                    updatedAtEpochMs = now
+                )
+                val updatedList = FamilyConfig.mergeRecurringPayments(
+                    local = current.recurringPayments,
+                    remote = listOf(nextPayment)
+                )
+                applyLocalConfigLocked(
+                    current.copy(recurringPayments = updatedList),
+                    hasUnsynced = true
+                )
+                nextPayment
+            }
+            recurringDao.upsert(deleted)
+        }
+        requestCoalescedSync()
+    }
+
+    private suspend fun reconcileAndProcessRecurringOnStartup() {
+        val needsSync = recurringMutex.withLock {
+            val roomList = recurringDao.getAll()
+            var configChanged = false
+            val targetList = synchronized(configLock) {
+                val current = _familyConfig.value
+                val merged = FamilyConfig.mergeRecurringPayments(current.recurringPayments, roomList)
+                if (merged != current.recurringPayments) {
+                    applyLocalConfigLocked(current.copy(recurringPayments = merged), hasUnsynced = true)
+                    configChanged = true
+                }
+                merged
+            }
+            if (targetList.isNotEmpty()) {
+                recurringDao.upsertAll(targetList)
+            }
+            val processed = evaluateAndPersistRecurringLocked()
+            configChanged || processed
+        }
+        if (needsSync) {
+            requestCoalescedSync()
+        }
+    }
+
+    private suspend fun mirrorConfigRecurringToRoom() {
+        recurringMutex.withLock {
+            val configPayments = synchronized(configLock) { _familyConfig.value.recurringPayments }
+            val roomById = recurringDao.getAll().associateBy { it.id }
+            val toUpsert = configPayments.filter { cfg ->
+                val existing = roomById[cfg.id]
+                existing == null || existing != cfg
+            }
+            if (toUpsert.isNotEmpty()) {
+                recurringDao.upsertAll(toUpsert)
+            }
+        }
+    }
+
+    private suspend fun evaluateAndPersistRecurringLocked(): Boolean {
+        val payments = synchronized(configLock) { _familyConfig.value.recurringPayments }
+        if (payments.isEmpty()) return false
+        val existingIds = dao.getAllExpenses().map { it.id }.toSet()
+        val result = RecurringPaymentScheduler.evaluateDuePayments(
+            payments = payments,
+            existingExpenseIds = existingIds,
+            nowMs = System.currentTimeMillis(),
+            defaultAuthorName = prefs.currentUserName
+        )
+        if (result.generatedExpenses.isEmpty() && result.updatedPayments.isEmpty()) {
+            return false
+        }
+
+        val updatedById = result.updatedPayments.associateBy { it.id }
+        val mergedPayments = synchronized(configLock) {
+            val current = _familyConfig.value
+            val nextList = FamilyConfig.mergeRecurringPayments(
+                local = current.recurringPayments,
+                remote = result.updatedPayments
+            )
+            if (nextList != current.recurringPayments) {
+                applyLocalConfigLocked(
+                    current.copy(recurringPayments = nextList),
+                    hasUnsynced = true
+                )
+            }
+            nextList
+        }
+
+        db.withTransaction {
+            if (result.generatedExpenses.isNotEmpty()) {
+                val toInsert = result.generatedExpenses.filter { it.id !in existingIds }
+                if (toInsert.isNotEmpty()) {
+                    dao.upsertAll(toInsert)
+                }
+            }
+            if (updatedById.isNotEmpty()) {
+                recurringDao.upsertAll(mergedPayments.filter { it.id in updatedById })
+            }
+        }
+        return true
     }
 
     /**

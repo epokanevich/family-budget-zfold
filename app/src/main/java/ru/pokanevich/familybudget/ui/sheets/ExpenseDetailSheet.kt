@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
+import ru.pokanevich.familybudget.data.RecurringPaymentScheduler
 import ru.pokanevich.familybudget.ui.theme.AuthorPill
 import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
@@ -76,6 +77,7 @@ fun ExpenseDetailSheet(
         "PUSH_SBER" -> "Автоперехват СберБанк"
         "PUSH_MIRPAY" -> "Автоперехват Mir Pay"
         "QR_RECEIPT" -> "QR-код чека ФНС"
+        RecurringPaymentScheduler.SOURCE_TYPE_RECURRING -> "Регулярный платёж"
         "IMPORT_MM" -> "Перенесено из Money Manager"
         else -> "Добавлено вручную"
     }

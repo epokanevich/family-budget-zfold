@@ -12,9 +12,14 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * при любом изменении схемы поднимайте version и добавляйте Migration
  * (схемы экспортируются в app/schemas и коммитятся в репозиторий).
  */
-@Database(entities = [ExpenseEntity::class], version = 2, exportSchema = true)
+@Database(
+    entities = [ExpenseEntity::class, RecurringPaymentEntity::class],
+    version = 3,
+    exportSchema = true
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun expenseDao(): ExpenseDao
+    abstract fun recurringPaymentDao(): RecurringPaymentDao
 
     companion object {
         @Volatile
@@ -28,6 +33,26 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `recurring_payments` (" +
+                        "`id` TEXT NOT NULL, " +
+                        "`title` TEXT NOT NULL, " +
+                        "`amountRub` REAL NOT NULL, " +
+                        "`categoryId` TEXT NOT NULL, " +
+                        "`operationType` TEXT NOT NULL, " +
+                        "`dayOfMonth` INTEGER NOT NULL, " +
+                        "`autoCreateInFeed` INTEGER NOT NULL, " +
+                        "`lastPaidPeriodKey` TEXT NOT NULL, " +
+                        "`isActive` INTEGER NOT NULL, " +
+                        "`isDeleted` INTEGER NOT NULL, " +
+                        "`updatedAtEpochMs` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`id`))"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -35,7 +60,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "family_budget_zfold.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { INSTANCE = it }
             }

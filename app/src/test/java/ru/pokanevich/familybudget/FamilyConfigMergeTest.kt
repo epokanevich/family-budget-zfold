@@ -13,6 +13,8 @@ import ru.pokanevich.familybudget.data.CategoryDescriptor
 import ru.pokanevich.familybudget.data.CategoryLimitMode
 import ru.pokanevich.familybudget.data.ExpenseCategory
 import ru.pokanevich.familybudget.data.FamilyConfig
+import ru.pokanevich.familybudget.data.OperationType
+import ru.pokanevich.familybudget.data.RecurringPaymentEntity
 
 class FamilyConfigMergeTest {
 
@@ -335,5 +337,144 @@ class FamilyConfigMergeTest {
         )
         assertFalse(syncedPlan.updateLocal)
         assertFalse(syncedPlan.needCloudPush)
+    }
+
+    @Test
+    fun recurringPayments_roundTripAndLegacyConfigCompatibility() {
+        val rent = RecurringPaymentEntity(
+            id = "rec-rent",
+            title = "Аренда",
+            amountRub = 55_000.0,
+            categoryId = ExpenseCategory.UTILITIES.name,
+            operationType = OperationType.EXPENSE.name,
+            dayOfMonth = 31,
+            autoCreateInFeed = true,
+            lastPaidPeriodKey = "2026-11",
+            isActive = true,
+            isDeleted = false,
+            updatedAtEpochMs = 1_763_500_001_000L
+        )
+        val salary = RecurringPaymentEntity(
+            id = "rec-salary",
+            title = "Зарплата",
+            amountRub = 140_000.0,
+            categoryId = ExpenseCategory.INCOME_SALARY.name,
+            operationType = OperationType.INCOME.name,
+            dayOfMonth = 10,
+            autoCreateInFeed = false,
+            lastPaidPeriodKey = "",
+            isActive = false,
+            isDeleted = false,
+            updatedAtEpochMs = 1_763_500_002_000L
+        )
+
+        val config = FamilyConfig(
+            schemaVersion = 1,
+            monthlyBudgetRub = 230_000.0,
+            budgetUpdatedAtEpochMs = 100L,
+            categories = emptyList(),
+            recurringPayments = listOf(salary, rent)
+        )
+
+        val restored = FamilyConfig.fromJsonString(config.toJsonObject().toString())
+        assertNotNull(restored)
+        assertTrue(config.isEquivalentTo(restored!!))
+        assertEquals(2, restored.recurringPayments.size)
+        assertEquals(listOf("rec-rent", "rec-salary"), restored.recurringPayments.map { it.id })
+
+        // Legacy config_v1.json without recurringPayments key must parse cleanly with empty list
+        val legacyJson = JSONObject().apply {
+            put("schemaVersion", 1)
+            put("monthlyBudgetRub", 200_000.0)
+            put("budgetUpdatedAtEpochMs", 500L)
+            put("categories", JSONArray())
+        }
+        val legacyConfig = FamilyConfig.fromJsonObject(legacyJson)
+        assertNotNull(legacyConfig)
+        assertTrue(legacyConfig!!.recurringPayments.isEmpty())
+
+        // Invalid or clamped fields in RecurringPaymentEntity.fromJsonObject
+        assertNull(RecurringPaymentEntity.fromJsonObject(JSONObject().put("id", "  ")))
+        val clamped = RecurringPaymentEntity.fromJsonObject(
+            JSONObject().apply {
+                put("id", "clamped-1")
+                put("title", JSONObject.NULL)
+                put("dayOfMonth", 99)
+                put("operationType", "UNKNOWN_FUTURE_TYPE")
+                put("lastPaidPeriodKey", JSONObject.NULL)
+            }
+        )
+        assertNotNull(clamped)
+        assertEquals(31, clamped!!.dayOfMonth)
+        assertEquals(OperationType.EXPENSE.name, clamped.operationType)
+        assertEquals("", clamped.lastPaidPeriodKey)
+    }
+
+    @Test
+    fun merge_recurringPaymentsPerElement_preservesConcurrentEditsAndPropagatesSoftDelete() {
+        val internetA = RecurringPaymentEntity(
+            id = "rec-inet",
+            title = "Интернет",
+            amountRub = 850.0,
+            categoryId = ExpenseCategory.UTILITIES.name,
+            dayOfMonth = 15,
+            autoCreateInFeed = true,
+            lastPaidPeriodKey = "2026-11",
+            isActive = true,
+            isDeleted = false,
+            updatedAtEpochMs = 5_000L
+        )
+        val internetBStale = internetA.copy(
+            amountRub = 800.0,
+            lastPaidPeriodKey = "",
+            updatedAtEpochMs = 2_000L
+        )
+        val gymFromB = RecurringPaymentEntity(
+            id = "rec-gym",
+            title = "Спортзал",
+            amountRub = 3_900.0,
+            categoryId = ExpenseCategory.LEISURE.name,
+            dayOfMonth = 20,
+            autoCreateInFeed = false,
+            updatedAtEpochMs = 4_000L
+        )
+
+        val phoneA = FamilyConfig(
+            monthlyBudgetRub = 250_000.0,
+            budgetUpdatedAtEpochMs = 6_000L,
+            recurringPayments = listOf(internetA)
+        )
+        val phoneB = FamilyConfig(
+            monthlyBudgetRub = 200_000.0,
+            budgetUpdatedAtEpochMs = 1_000L,
+            recurringPayments = listOf(internetBStale, gymFromB)
+        )
+
+        val mergedAB = FamilyConfig.merge(phoneA, phoneB)
+        val mergedBA = FamilyConfig.merge(phoneB, phoneA)
+
+        for (merged in listOf(mergedAB, mergedBA)) {
+            assertEquals(250_000.0, merged.monthlyBudgetRub, 0.0001)
+            assertEquals(2, merged.recurringPayments.size)
+            val mergedInet = merged.recurringPayments.first { it.id == "rec-inet" }
+            val mergedGym = merged.recurringPayments.first { it.id == "rec-gym" }
+            assertEquals(850.0, mergedInet.amountRub, 0.0001)
+            assertEquals("2026-11", mergedInet.lastPaidPeriodKey)
+            assertEquals(gymFromB, mergedGym)
+        }
+
+        // Soft delete on Phone B with newer timestamp propagates to Phone A
+        val gymDeletedB = gymFromB.copy(
+            isActive = false,
+            isDeleted = true,
+            updatedAtEpochMs = 8_000L
+        )
+        val mergedAfterDelete = FamilyConfig.merge(
+            local = mergedAB,
+            remote = FamilyConfig(recurringPayments = listOf(gymDeletedB))
+        )
+        val deletedGym = mergedAfterDelete.recurringPayments.first { it.id == "rec-gym" }
+        assertTrue(deletedGym.isDeleted)
+        assertFalse(deletedGym.isActive)
     }
 }
