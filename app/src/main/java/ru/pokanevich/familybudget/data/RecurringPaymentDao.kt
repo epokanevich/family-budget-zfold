@@ -26,4 +26,7 @@ interface RecurringPaymentDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(payments: List<RecurringPaymentEntity>)
+
+    @Query("DELETE FROM recurring_payments")
+    suspend fun deleteAll()
 }

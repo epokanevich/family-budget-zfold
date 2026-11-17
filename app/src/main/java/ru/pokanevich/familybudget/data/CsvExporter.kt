@@ -12,8 +12,8 @@ import java.util.Locale
 object CsvExporter {
 
     private val ruLocale = Locale("ru", "RU")
-    private val dateFormat = SimpleDateFormat("dd.MM.yyyy", ruLocale)
-    private val timeFormat = SimpleDateFormat("HH:mm", ruLocale)
+    private val dateFormat = ThreadLocal.withInitial { SimpleDateFormat("dd.MM.yyyy", ruLocale) }
+    private val timeFormat = ThreadLocal.withInitial { SimpleDateFormat("HH:mm", ruLocale) }
 
     private val amountFormatter = DecimalFormat("0.00", DecimalFormatSymbols(Locale.US).apply {
         decimalSeparator = '.'
@@ -60,8 +60,8 @@ object CsvExporter {
 
         for (expense in filteredAndSorted) {
             val date = Date(expense.createdAtEpochMs)
-            val dateStr = dateFormat.format(date)
-            val timeStr = timeFormat.format(date)
+            val dateStr = dateFormat.get()!!.format(date)
+            val timeStr = timeFormat.get()!!.format(date)
 
             val typeStr = when (expense.resolveOperationType(registry)) {
                 OperationType.EXPENSE -> "Расход"

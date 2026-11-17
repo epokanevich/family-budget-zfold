@@ -93,7 +93,7 @@ fun PushPermissionBanner(
                     color = palette.textPrimary
                 )
                 Text(
-                    text = "Включите доступ к пушам. Выбор банков — в настройках этого телефона.",
+                    text = "Включите доступ к пушам. При установке APK: О приложении → ⋮ → Ограниченные настройки.",
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.textSecondary
                 )

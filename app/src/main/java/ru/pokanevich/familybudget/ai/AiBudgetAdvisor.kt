@@ -211,23 +211,25 @@ object AiBudgetAdvisor {
             recurringPayments.isNotEmpty()
         ) {
             val currentMonthKey = RecurringPaymentScheduler.periodKeyFor(nowMs)
-            val confirmedCurrentMonthIds = expenses.asSequence()
-                .filter {
-                    !it.isDeleted &&
-                        !it.isPendingConfirmation &&
-                        it.createdAtEpochMs in window.startMs..window.endMs
-                }
+            val confirmedRecurringIds = expenses.asSequence()
+                .filter { !it.isDeleted && !it.isPendingConfirmation }
+                .map { it.id }
+                .toHashSet()
+            val pendingRecurringIds = expenses.asSequence()
+                .filter { !it.isDeleted && it.isPendingConfirmation }
                 .map { it.id }
                 .toHashSet()
 
             recurringPayments
                 .asSequence()
                 .filter { p ->
-                    p.isActive &&
-                        !p.isDeleted &&
-                        p.effectiveOperationType == OperationType.EXPENSE &&
-                        p.lastPaidPeriodKey != currentMonthKey &&
-                        RecurringPaymentScheduler.deterministicExpenseId(p.id, currentMonthKey) !in confirmedCurrentMonthIds
+                    if (!p.isActive || p.isDeleted || p.effectiveOperationType != OperationType.EXPENSE) {
+                        return@filter false
+                    }
+                    val deterministicId = RecurringPaymentScheduler.deterministicExpenseId(p.id, currentMonthKey)
+                    // Пока авто-созданный платёж ждёт подтверждения в ленте, он не учтён в totalSpent — удерживаем в резерве.
+                    deterministicId in pendingRecurringIds ||
+                        (p.lastPaidPeriodKey != currentMonthKey && deterministicId !in confirmedRecurringIds)
                 }
                 .sumOf { it.amountRub.coerceAtLeast(0.0) }
         } else {

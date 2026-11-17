@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -135,7 +136,7 @@ fun AddEditExpenseSheet(
     var amountText by remember(editingExpense, initialAmount) { mutableStateOf(startAmount) }
     var merchantText by remember(editingExpense, initialMerchant) { mutableStateOf(startMerchant) }
     var noteText by remember(editingExpense) { mutableStateOf(startNote) }
-    var selectedCategory by remember(editingExpense, initialMerchant, registry) { mutableStateOf(startCategory) }
+    var selectedCategory by remember(editingExpense, initialMerchant) { mutableStateOf(startCategory) }
     var selectedAuthor by remember(editingExpense, defaultAuthorName) { mutableStateOf(startAuthor) }
     var isSplitMode by remember(editingExpense) { mutableStateOf(false) }
     var nextSplitKey by remember(editingExpense) { mutableIntStateOf(3) }
@@ -197,6 +198,7 @@ fun AddEditExpenseSheet(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .navigationBarsPadding()
+                .imePadding()
                 .padding(bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {

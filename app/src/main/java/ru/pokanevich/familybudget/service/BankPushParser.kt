@@ -51,7 +51,19 @@ object BankPushParser {
         "платёж отменён", "платеж отменен",
         "отказ", "отказано", "недостаточно средств", "отклонена", "отклонено",
         "отклонён", "отклонен", "не выполнена", "не удалось", "ошибка операции",
-        "кредитный лимит", "лимит по карте"
+        "кредитный лимит", "лимит по карте",
+        "проценты на остаток", "начислен кэшбэк", "начислен кешбэк",
+        "выплата кэшбэка", "выплата кешбэка"
+    )
+
+    private val CASHBACK_CREDIT_REGEX = Regex(
+        "(?:к[эе]шб[эе]к|cashback|начислен|бонус(?:ы|ов)?|вознаграждени)",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val EXPLICIT_EXPENSE_VERB_REGEX = Regex(
+        "(?:покупк|оплат|списан|плат[её]ж|перевод|расход|минус|−)",
+        RegexOption.IGNORE_CASE
     )
 
     // Lookaround вместо \b, т.к. в Java Regex \b не работает с кириллицей
@@ -280,7 +292,14 @@ object BankPushParser {
         val match = AMOUNT_REGEX.find(textBeforeBalance) ?: return null
         val capturedAmount = match.groupValues[1]
         val numberStart = textBeforeBalance.indexOf(capturedAmount, match.range.first)
-        if (numberStart > 0 && textBeforeBalance.substring(0, numberStart).trimEnd().endsWith("+")) {
+        val prefixBeforeAmount = if (numberStart > 0) textBeforeBalance.substring(0, numberStart) else ""
+        if (prefixBeforeAmount.trimEnd().endsWith("+")) {
+            return null
+        }
+        // Отсекаем отдельные уведомления вида «Кэшбэк 450 ₽», но сохраняем покупки вида «Покупка 1200 ₽ Пятёрочка. Кэшбэк 12 ₽»
+        if (CASHBACK_CREDIT_REGEX.containsMatchIn(prefixBeforeAmount) &&
+            !EXPLICIT_EXPENSE_VERB_REGEX.containsMatchIn(prefixBeforeAmount)
+        ) {
             return null
         }
 

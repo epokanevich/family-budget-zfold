@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -72,6 +73,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import ru.pokanevich.familybudget.data.BankPushSource
+import ru.pokanevich.familybudget.data.FamilyPreferences
 import ru.pokanevich.familybudget.data.PinSecurityManager
 import ru.pokanevich.familybudget.data.SyncState
 import ru.pokanevich.familybudget.ui.components.PinDialogMode
@@ -112,6 +114,7 @@ fun FamilySettingsSheet(
     onExportCsvCurrentPeriod: () -> Unit,
     onExportCsvAllTime: () -> Unit,
     onOpenPushSettings: () -> Unit,
+    onOpenAppInfoSettings: () -> Unit = {},
     onRequestBatteryExemption: () -> Unit,
     onSimulateTestPush: () -> Unit,
     onImportBackupUri: (Uri) -> Unit,
@@ -172,6 +175,7 @@ fun FamilySettingsSheet(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .navigationBarsPadding()
+                .imePadding()
                 .padding(bottom = 22.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -239,6 +243,14 @@ fun FamilySettingsSheet(
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                if (FamilyPreferences.normalizeFamilyCode(code) != FamilyPreferences.normalizeFamilyCode(familySpaceCode)) {
+                    Text(
+                        text = "При сохранении нового кода локальный кэш будет очищен, чтобы не смешать базы разных семей.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.accentAmber
+                    )
+                }
 
                 OutlinedTextField(
                     value = budget,
@@ -640,6 +652,24 @@ fun FamilySettingsSheet(
                         color = if (isPushAccessGranted) palette.accentEmerald else palette.accentBlue,
                         fontWeight = FontWeight.SemiBold
                     )
+                }
+
+                if (!isPushAccessGranted) {
+                    Text(
+                        text = "На Android 13+ при установке APK из Telegram системный тумблер может быть заблокирован: откройте «О приложении» → ⋮ → «Разрешить ограниченные настройки».",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.textSecondary
+                    )
+                    TextButton(
+                        onClick = onOpenAppInfoSettings,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "Открыть «О приложении» (разблокировать ⋮)",
+                            color = palette.accentBlue,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
 
                 OutlinedButton(

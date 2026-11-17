@@ -311,6 +311,9 @@ fun FamilyBudgetApp(
 
     val confirmedExpenses by repository.confirmedExpenses.collectAsState(initial = emptyList())
     val pendingPushExpenses by repository.pendingPushExpenses.collectAsState(initial = emptyList())
+    val allLiveExpenses = remember(confirmedExpenses, pendingPushExpenses) {
+        confirmedExpenses + pendingPushExpenses
+    }
     val syncState by repository.syncState.collectAsState()
     val isSyncing by repository.isSyncing.collectAsState()
     val familyConfig by repository.familyConfig.collectAsState()
@@ -362,7 +365,7 @@ fun FamilyBudgetApp(
                 val snapshot = withContext(Dispatchers.Default) {
                     AiDatabaseContextBuilder.build(
                         question = cleanQuestion,
-                        expenses = confirmedExpenses,
+                        expenses = allLiveExpenses,
                         registry = categoryRegistry,
                         monthlyBudgetRub = monthlyBudgetRub,
                         recurringPayments = recurringPayments,
@@ -418,9 +421,12 @@ fun FamilyBudgetApp(
             scope.launch {
                 val success = withContext(Dispatchers.IO) {
                     runCatching {
-                        context.contentResolver.openOutputStream(uri)?.use { stream ->
-                            stream.write(bytes)
-                            stream.flush()
+                        val stream = requireNotNull(context.contentResolver.openOutputStream(uri)) {
+                            "Не удалось открыть поток записи"
+                        }
+                        stream.use { output ->
+                            output.write(bytes)
+                            output.flush()
                         }
                     }.isSuccess
                 }
@@ -452,7 +458,7 @@ fun FamilyBudgetApp(
     }
 
     val aiReport = remember(
-        confirmedExpenses,
+        allLiveExpenses,
         monthlyBudgetRub,
         periodWindow,
         categoryRegistry,
@@ -460,7 +466,7 @@ fun FamilyBudgetApp(
         savingsGoals
     ) {
         AiBudgetAdvisor.buildInstantLocalReport(
-            expenses = confirmedExpenses,
+            expenses = allLiveExpenses,
             monthlyBudgetRub = monthlyBudgetRub,
             window = periodWindow,
             registry = categoryRegistry,
@@ -967,17 +973,37 @@ fun FamilyBudgetApp(
                 val periodExpenses = confirmedExpenses.filter {
                     it.createdAtEpochMs in periodWindow.startMs..periodWindow.endMs
                 }
-                pendingCsvBytesToExport = CsvExporter.buildCsvBytes(periodExpenses, registry = categoryRegistry)
+                val registrySnapshot = categoryRegistry
                 val fileName = "family_budget_${selectedPeriod.name.lowercase()}.csv"
-                csvExportLauncher.launch(fileName)
+                scope.launch {
+                    val bytes = withContext(Dispatchers.Default) {
+                        CsvExporter.buildCsvBytes(periodExpenses, registry = registrySnapshot)
+                    }
+                    pendingCsvBytesToExport = bytes
+                    csvExportLauncher.launch(fileName)
+                }
             },
             onExportCsvAllTime = {
-                pendingCsvBytesToExport = CsvExporter.buildCsvBytes(confirmedExpenses, registry = categoryRegistry)
-                val fileName = "family_budget_all.csv"
-                csvExportLauncher.launch(fileName)
+                val expensesSnapshot = confirmedExpenses
+                val registrySnapshot = categoryRegistry
+                scope.launch {
+                    val bytes = withContext(Dispatchers.Default) {
+                        CsvExporter.buildCsvBytes(expensesSnapshot, registry = registrySnapshot)
+                    }
+                    pendingCsvBytesToExport = bytes
+                    csvExportLauncher.launch("family_budget_all.csv")
+                }
             },
             onOpenPushSettings = {
                 context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+            },
+            onOpenAppInfoSettings = {
+                context.startActivity(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.fromParts("package", context.packageName, null)
+                    )
+                )
             },
             onRequestBatteryExemption = openBatteryExemption,
             onSimulateTestPush = {
@@ -1029,25 +1055,27 @@ fun FamilyBudgetApp(
             onDismiss = { showSettingsSheet = false },
             onSave = { newName, newCode, newBudget, newAutoConfirm, newBankSources, newApiKey, newTheme ->
                 val previousCode = FamilyPreferences.normalizeFamilyCode(familySpaceCode)
+                val targetCode = FamilyPreferences.normalizeFamilyCode(newCode)
+                val codeChanged = targetCode != previousCode
                 repository.prefs.currentUserName = newName
-                repository.prefs.familySpaceCode = newCode
-                val savedCode = repository.prefs.familySpaceCode
-                val codeChanged = FamilyPreferences.normalizeFamilyCode(savedCode) != previousCode
                 repository.prefs.autoConfirmBankPush = newAutoConfirm
                 repository.prefs.enabledBankPushSources = newBankSources
                 repository.prefs.geminiApiKey = newApiKey
                 repository.prefs.themeMode = newTheme.prefKey
 
                 currentUserName = newName
-                familySpaceCode = savedCode
+                familySpaceCode = targetCode
                 autoConfirmPush = newAutoConfirm
                 enabledBankSources = repository.prefs.enabledBankPushSources
                 geminiApiKey = repository.prefs.geminiApiKey
                 onThemeModeChange(newTheme)
 
-                repository.updateMonthlyBudget(newBudget)
                 if (codeChanged) {
-                    scope.launch { repository.syncWithCloudNow() }
+                    scope.launch {
+                        repository.switchFamilySpace(targetCode, initialMonthlyBudgetRub = newBudget)
+                    }
+                } else {
+                    repository.updateMonthlyBudget(newBudget)
                 }
                 showSettingsSheet = false
             }

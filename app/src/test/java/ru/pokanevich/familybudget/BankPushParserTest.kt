@@ -664,4 +664,40 @@ class BankPushParserTest {
         assertNotNull(personTransfer)
         assertEquals(OperationType.EXPENSE.name, personTransfer!!.suggestedOperationType)
     }
+
+    @Test
+    fun parseNotification_ignoresStandaloneCashbackAndInterest_butKeepsPurchaseWithCashback() {
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "ru.sberbankmobile",
+                title = "СберБанк Онлайн",
+                text = "Начислен кэшбэк 500 ₽ за ноябрь"
+            )
+        )
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "com.idamob.tinkoff.android",
+                title = "Т-Банк",
+                text = "Кэшбэк 450 ₽ за покупки",
+                enabledSources = setOf(BankPushSource.TBANK)
+            )
+        )
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "ru.ozon.fintech.finance",
+                title = "Ozon Банк",
+                text = "Проценты на остаток 185.40 ₽",
+                enabledSources = setOf(BankPushSource.OZON)
+            )
+        )
+
+        val purchaseWithCashback = BankPushParser.parseNotification(
+            packageName = "ru.sberbankmobile",
+            title = "СберБанк Онлайн",
+            text = "Покупка 1 200 ₽ Пятёрочка. Кэшбэк 12 ₽"
+        )
+        assertNotNull(purchaseWithCashback)
+        assertEquals(1200.0, purchaseWithCashback!!.amountRub, 0.001)
+        assertEquals("Пятёрочка", purchaseWithCashback.merchant)
+    }
 }

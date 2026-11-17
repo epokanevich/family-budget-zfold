@@ -222,6 +222,54 @@ class BudgetRepository private constructor(context: Context) {
     }
 
     /**
+     * Безопасно переключает приложение на другой код семьи: предварительно полностью очищает
+     * локальный кэш Room, ETag/SHA и дедуп-ключи предыдущего пространства, чтобы данные разных
+     * семей (или тестовой базы) никогда не смешивались и не загружались в чужое облако.
+     */
+    suspend fun switchFamilySpace(newFamilyCode: String, initialMonthlyBudgetRub: Double? = null) {
+        val targetCode = FamilyPreferences.normalizeFamilyCode(newFamilyCode)
+        val switched = syncMutex.withLock {
+            val currentCode = FamilyPreferences.normalizeFamilyCode(prefs.familySpaceCode)
+            if (currentCode == targetCode) return@withLock false
+            recurringMutex.withLock {
+                goalsMutex.withLock {
+                    dao.deleteAll()
+                    recurringDao.deleteAll()
+                    savingsGoalDao.deleteAll()
+                    synchronized(configLock) {
+                        val fallbackBudget = initialMonthlyBudgetRub
+                            ?.takeIf { it.isFinite() && it > 0.0 }
+                            ?: _familyConfig.value.monthlyBudgetRub
+                        val cleanConfig = FamilyConfig(
+                            schemaVersion = FamilyConfig.CURRENT_SCHEMA_VERSION,
+                            monthlyBudgetRub = fallbackBudget,
+                            budgetUpdatedAtEpochMs = 0L,
+                            categories = emptyList(),
+                            recurringPayments = emptyList(),
+                            savingsGoals = emptyList()
+                        )
+                        applyLocalConfigLocked(cleanConfig, hasUnsynced = false)
+                    }
+                    cachedFamilyCode = targetCode
+                    cachedEtag = null
+                    cachedRemoteSha = null
+                    cachedRemoteMap = emptyMap()
+                    cachedConfigEtag = null
+                    cachedConfigSha = null
+                    cachedRemoteConfig = null
+                    prefs.recentPushDedupKeys = emptyList()
+                    prefs.familySpaceCode = targetCode
+                }
+            }
+            true
+        }
+        if (switched) {
+            BudgetWidgetProvider.requestUpdate(appContext)
+            syncWithCloudNow()
+        }
+    }
+
+    /**
      * Обновляет общий месячный бюджет семьи с новым `budgetUpdatedAtEpochMs`
      * и ставит синхронизацию в очередь для отправки на второй телефон.
      */

@@ -55,4 +55,7 @@ interface ExpenseDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(expenses: List<ExpenseEntity>)
+
+    @Query("DELETE FROM expenses")
+    suspend fun deleteAll()
 }

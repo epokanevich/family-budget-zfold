@@ -23,4 +23,7 @@ interface SavingsGoalDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(goals: List<SavingsGoalEntity>)
+
+    @Query("DELETE FROM savings_goals")
+    suspend fun deleteAll()
 }

@@ -351,4 +351,45 @@ class AiDatabaseContextBuilderTest {
             .filter { it.startsWith("- ") }
         assertEquals(15, topMerchantsBlock.size)
     }
+
+    @Test
+    fun build_keepsReserveAndStatusForPendingAutoCreatedRecurring() {
+        val nowMs = epochAt(2026, 11, 20, 12)
+        val payment = RecurringPaymentEntity(
+            id = "mortgage-1",
+            title = "Ипотека",
+            amountRub = 35_000.0,
+            categoryId = ExpenseCategory.UTILITIES.name,
+            operationType = OperationType.EXPENSE.name,
+            dayOfMonth = 20,
+            autoCreateInFeed = true,
+            lastPaidPeriodKey = "2026-11",
+            isActive = true
+        )
+        val pendingExpense = ExpenseEntity(
+            id = "rec_mortgage-1_2026-11",
+            amountRub = 35_000.0,
+            merchant = "Ипотека",
+            categoryName = ExpenseCategory.UTILITIES.name,
+            authorName = "Евгений",
+            sourceType = "RECURRING",
+            isPendingConfirmation = true,
+            createdAtEpochMs = nowMs,
+            updatedAtEpochMs = nowMs
+        )
+
+        val snapshot = AiDatabaseContextBuilder.build(
+            question = "Какой остаток на месяц?",
+            expenses = listOf(pendingExpense),
+            monthlyBudgetRub = 100_000.0,
+            recurringPayments = listOf(payment),
+            nowMs = nowMs,
+            zoneId = zoneId
+        )
+
+        assertTrue(snapshot.baseSummary.contains("Ипотека: 35 000 ₽, расход, 20-го числа"))
+        assertTrue(snapshot.baseSummary.contains("ожидает подтверждения (в резерве)"))
+        assertTrue(snapshot.baseSummary.contains("Резерв под ещё не списанные регулярные расходы этого месяца: 35 000 ₽"))
+        assertEquals(0, snapshot.totalRecordsInDatabase)
+    }
 }

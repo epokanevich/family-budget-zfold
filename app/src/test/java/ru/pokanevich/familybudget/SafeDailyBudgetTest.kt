@@ -247,4 +247,74 @@ class SafeDailyBudgetTest {
         assertEquals(100_000.0, report.freeBudgetAfterReserveRub, 0.01)
         assertEquals(0.0, report.safeDailySpendRemainingRub, 0.01)
     }
+
+    @Test
+    fun autoCreatedPendingRecurring_keepsReserveUntilConfirmedOrDismissed() {
+        val nowMs = epochInMonth(2026, Calendar.NOVEMBER, 15)
+        val window = buildMonthWindow(
+            year = 2026,
+            monthZeroBased = Calendar.NOVEMBER,
+            isCurrentPeriod = true,
+            daysLeftInPeriod = 15,
+            progressRatio = 0.5f
+        )
+
+        val payment = RecurringPaymentEntity(
+            id = "rent-auto",
+            title = "Аренда",
+            amountRub = 30_000.0,
+            categoryId = ExpenseCategory.UTILITIES.name,
+            operationType = OperationType.EXPENSE.name,
+            dayOfMonth = 15,
+            autoCreateInFeed = true,
+            lastPaidPeriodKey = "",
+            isActive = true,
+            isDeleted = false
+        )
+
+        val eval = RecurringPaymentScheduler.evaluateDuePayments(
+            payments = listOf(payment),
+            nowMs = nowMs
+        )
+        assertEquals(1, eval.generatedExpenses.size)
+        assertEquals(1, eval.updatedPayments.size)
+        assertEquals("2026-11", eval.updatedPayments.single().lastPaidPeriodKey)
+
+        // Пока авто-созданный платёж ждёт подтверждения, он ещё не в spent, но должен оставаться в резерве
+        val pendingReport = AiBudgetAdvisor.buildInstantLocalReport(
+            expenses = eval.generatedExpenses,
+            monthlyBudgetRub = 100_000.0,
+            window = window,
+            recurringPayments = eval.updatedPayments,
+            nowMs = nowMs
+        )
+        assertEquals(0.0, pendingReport.totalSpentThisMonthRub, 0.01)
+        assertEquals(30_000.0, pendingReport.upcomingRecurringReserveRub, 0.01)
+        assertEquals(70_000.0, pendingReport.freeBudgetAfterReserveRub, 0.01)
+
+        // После подтверждения сумма переходит из резерва в траты без скачка свободного остатка
+        val confirmedExpense = eval.generatedExpenses.single().copy(isPendingConfirmation = false)
+        val confirmedReport = AiBudgetAdvisor.buildInstantLocalReport(
+            expenses = listOf(confirmedExpense),
+            monthlyBudgetRub = 100_000.0,
+            window = window,
+            recurringPayments = eval.updatedPayments,
+            nowMs = nowMs
+        )
+        assertEquals(30_000.0, confirmedReport.totalSpentThisMonthRub, 0.01)
+        assertEquals(0.0, confirmedReport.upcomingRecurringReserveRub, 0.01)
+        assertEquals(70_000.0, confirmedReport.freeBudgetAfterReserveRub, 0.01)
+
+        // После отклонения (удаления) резерв также снимается
+        val dismissedExpense = eval.generatedExpenses.single().copy(isDeleted = true)
+        val dismissedReport = AiBudgetAdvisor.buildInstantLocalReport(
+            expenses = listOf(dismissedExpense),
+            monthlyBudgetRub = 100_000.0,
+            window = window,
+            recurringPayments = eval.updatedPayments,
+            nowMs = nowMs
+        )
+        assertEquals(0.0, dismissedReport.upcomingRecurringReserveRub, 0.01)
+        assertEquals(100_000.0, dismissedReport.freeBudgetAfterReserveRub, 0.01)
+    }
 }

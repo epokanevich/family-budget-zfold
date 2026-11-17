@@ -158,7 +158,7 @@ object AiDatabaseContextBuilder {
     ): AiChatContextSnapshot {
         val confirmed = confirmedPool(expenses)
         val base = buildBaseSnapshot(
-            expenses = confirmed,
+            expenses = expenses,
             registry = registry,
             monthlyBudgetRub = monthlyBudgetRub,
             recurringPayments = recurringPayments,
@@ -292,7 +292,7 @@ object AiDatabaseContextBuilder {
             daysLeftInPeriod = (totalDaysInMonth - currentDay + 1).coerceAtLeast(1)
         )
         val report = AiBudgetAdvisor.buildInstantLocalReport(
-            expenses = confirmed,
+            expenses = expenses,
             monthlyBudgetRub = monthlyBudgetRub,
             window = monthWindow,
             registry = registry,
@@ -337,13 +337,22 @@ object AiDatabaseContextBuilder {
             sb.appendLine("Активных регулярных платежей нет.")
         } else {
             val monthKey = RecurringPaymentScheduler.periodKeyFor(nowMs, zoneId)
+            val pendingIds = expenses.asSequence()
+                .filter { !it.isDeleted && it.isPendingConfirmation }
+                .map { it.id }
+                .toHashSet()
             activeRecurring.sortedBy { it.dayOfMonth }.forEach { p ->
                 val type = when (p.effectiveOperationType) {
                     OperationType.EXPENSE -> "расход"
                     OperationType.INCOME -> "доход"
                     OperationType.TRANSFER -> "перевод"
                 }
-                val paid = if (p.isPaidInPeriod(monthKey)) "в этом месяце учтён" else "ожидается"
+                val deterministicId = RecurringPaymentScheduler.deterministicExpenseId(p.id, monthKey)
+                val paid = when {
+                    deterministicId in pendingIds -> "ожидает подтверждения (в резерве)"
+                    p.isPaidInPeriod(monthKey) -> "в этом месяце учтён"
+                    else -> "ожидается"
+                }
                 val cat = registry.resolve(p.categoryId).displayName
                 sb.appendLine("- ${sanitizeFreeText(p.title).ifBlank { cat }}: ${formatRub(p.amountRub)}, $type, ${p.dayOfMonth}-го числа, $cat, $paid")
             }
