@@ -14,7 +14,7 @@ class ExpenseEntityJsonTest {
             id = "expense-uuid-12345",
             amountRub = 850.50,
             merchant = "Пятёрочка",
-            categoryName = ExpenseCategory.SUPERMARKET.name,
+            categoryName = ExpenseCategory.GROCERIES.name,
             authorName = "Евгений",
             sourceType = "MANUAL",
             isPendingConfirmation = false,
@@ -51,7 +51,7 @@ class ExpenseEntityJsonTest {
             id = "custom-uuid-67890",
             amountRub = 4999.99,
             merchant = "ВкусВилл Экспресс",
-            categoryName = ExpenseCategory.CAFE.name,
+            categoryName = ExpenseCategory.CAFES.name,
             authorName = "Анжелика",
             sourceType = "PUSH_SBER",
             isPendingConfirmation = true,
@@ -88,12 +88,12 @@ class ExpenseEntityJsonTest {
             id = "salary-1",
             amountRub = 120000.0,
             merchant = "Аванс",
-            categoryName = ExpenseCategory.SALARY.name
+            categoryName = ExpenseCategory.INCOME_SALARY.name
         )
 
         val restored = ExpenseEntity.fromJsonObject(income.toJsonObject())
         assertNotNull(restored)
-        assertEquals(ExpenseCategory.SALARY, restored!!.category)
+        assertEquals(ExpenseCategory.INCOME_SALARY, restored!!.category)
         assertTrue(restored.isIncome)
     }
 
