@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.PieChart
 import androidx.compose.material.icons.rounded.Repeat
@@ -74,6 +75,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.pokanevich.familybudget.ai.AiBudgetAdvisor
 import ru.pokanevich.familybudget.ai.AiBudgetReport
+import ru.pokanevich.familybudget.ai.AiChatMessage
 import ru.pokanevich.familybudget.ai.CategoryDiagnosis
 import ru.pokanevich.familybudget.data.CategoryDescriptor
 import ru.pokanevich.familybudget.data.CategoryRegistry
@@ -85,6 +87,7 @@ import ru.pokanevich.familybudget.data.RecurringPaymentEntity
 import ru.pokanevich.familybudget.data.RecurringPaymentScheduler
 import ru.pokanevich.familybudget.data.SavingsGoalEntity
 import ru.pokanevich.familybudget.data.SavingsGoalProgress
+import ru.pokanevich.familybudget.ui.sheets.AiChatInlinePanel
 import ru.pokanevich.familybudget.ui.sheets.GoalTransferDialog
 import ru.pokanevich.familybudget.ui.sheets.SavingsGoalEditorDialog
 import ru.pokanevich.familybudget.ui.theme.AuthorAvatarCircle
@@ -127,6 +130,14 @@ fun AiAnalyticsPane(
     onRecordGoalTransfer: ((SavingsGoalEntity, Double, Boolean, String, String) -> Unit)? = null,
     allExpenses: List<ExpenseEntity> = emptyList(),
     categoryRegistry: CategoryRegistry = CategoryRegistry.DEFAULT,
+    isAiChatOpen: Boolean = false,
+    onOpenAiChat: () -> Unit = {},
+    onCloseAiChat: () -> Unit = {},
+    aiChatMessages: List<AiChatMessage> = emptyList(),
+    isAiChatSending: Boolean = false,
+    aiChatModelUsed: String? = null,
+    onSendAiChatQuestion: (String) -> Unit = {},
+    onClearAiChat: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val palette = LocalFamilyPalette.current
@@ -139,12 +150,97 @@ fun AiAnalyticsPane(
     var showNewGoalDialog by remember { mutableStateOf(false) }
     var quickGoalTransfer by remember { mutableStateOf<Pair<SavingsGoalProgress, Boolean>?>(null) }
 
+    val confirmedRecordsCount = remember(allExpenses) {
+        allExpenses.count { !it.isDeleted && !it.isPendingConfirmation }
+    }
+
+    if (isUnfoldedFoldable && isAiChatOpen) {
+        AiChatInlinePanel(
+            messages = aiChatMessages,
+            isSending = isAiChatSending,
+            activeModelName = aiChatModelUsed ?: cloudModelUsed ?: AiBudgetAdvisor.lastUsedModel(),
+            totalRecordsCount = confirmedRecordsCount,
+            geminiApiKey = geminiApiKey,
+            onSendQuestion = onSendAiChatQuestion,
+            onClearChat = onClearAiChat,
+            onOpenSettings = onOpenSettings,
+            onBackToAnalytics = onCloseAiChat,
+            modifier = modifier
+        )
+        return
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        if (isUnfoldedFoldable) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                color = palette.surfaceElevated
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = palette.surfaceCard,
+                        shadowElevation = if (!palette.isDark) 1.dp else 0.dp,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                    ) {
+                        Text(
+                            text = "Аналитика",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = palette.textPrimary,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color.Transparent,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable(onClick = onOpenAiChat)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.AutoAwesome,
+                                contentDescription = null,
+                                tint = palette.accentBlue,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = if (aiChatMessages.isNotEmpty()) {
+                                    "Чат с ИИ (${aiChatMessages.size})"
+                                } else {
+                                    "Чат с ИИ"
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.accentBlue,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+            }
+        }
         if (showPeriodSwitcher) {
             PeriodSwitcherBar(
                 window = window,
@@ -223,7 +319,8 @@ fun AiAnalyticsPane(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
                         Box(
                             modifier = Modifier
@@ -245,17 +342,22 @@ fun AiAnalyticsPane(
                                 style = MaterialTheme.typography.titleMedium,
                                 color = palette.textPrimary
                             )
+                            val displayedModel = cloudModelUsed ?: aiChatModelUsed
                             Text(
-                                text = if (cloudModelUsed != null) {
-                                    "Gemini ($cloudModelUsed)"
+                                text = if (displayedModel != null) {
+                                    "Gemini ($displayedModel)"
                                 } else {
                                     "Gemini ИИ готов (автоподбор модели)"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
-                                color = palette.textSecondary
+                                color = palette.textSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
+
+                    Spacer(modifier = Modifier.width(8.dp))
 
                     Button(
                         enabled = !isLoadingCloudAi && geminiApiKey.isNotBlank(),
@@ -366,6 +468,50 @@ fun AiAnalyticsPane(
                             modifier = Modifier.weight(1f)
                         )
                     }
+                }
+
+                OutlinedButton(
+                    onClick = onOpenAiChat,
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, palette.accentBlue.copy(alpha = 0.4f)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = palette.accentBlueSoft.copy(alpha = 0.55f),
+                        contentColor = palette.accentBlue
+                    ),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Forum,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Спросить ИИ по базе",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (aiChatMessages.isNotEmpty()) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = CircleShape,
+                            color = palette.accentBlue
+                        ) {
+                            Text(
+                                text = "${aiChatMessages.size}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.weight(1f))
+                    Icon(
+                        imageVector = Icons.Rounded.ChevronRight,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
             }
         }

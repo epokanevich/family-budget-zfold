@@ -87,6 +87,9 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.launch
 import ru.pokanevich.familybudget.ai.AiBudgetAdvisor
+import ru.pokanevich.familybudget.ai.AiChatMessage
+import ru.pokanevich.familybudget.ai.AiChatRole
+import ru.pokanevich.familybudget.ai.AiDatabaseContextBuilder
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import ru.pokanevich.familybudget.data.BankPushSource
@@ -107,6 +110,7 @@ import ru.pokanevich.familybudget.ui.components.AiAnalyticsPane
 import ru.pokanevich.familybudget.ui.components.ExpensesFeedPane
 import ru.pokanevich.familybudget.ui.components.PinLockScreen
 import ru.pokanevich.familybudget.ui.sheets.AddEditExpenseSheet
+import ru.pokanevich.familybudget.ui.sheets.AiChatSheet
 import ru.pokanevich.familybudget.ui.sheets.CategoriesAndLimitsSheet
 import ru.pokanevich.familybudget.ui.sheets.ExpenseDetailSheet
 import ru.pokanevich.familybudget.ui.sheets.FamilySettingsSheet
@@ -338,8 +342,59 @@ fun FamilyBudgetApp(
     var showCategoriesAndLimitsSheet by remember { mutableStateOf(false) }
     var showRecurringPaymentsSheet by remember { mutableStateOf(false) }
     var showSavingsGoalsSheet by remember { mutableStateOf(false) }
+    var isAiChatOpen by rememberSaveable { mutableStateOf(false) }
+    var aiChatMessages by remember { mutableStateOf<List<AiChatMessage>>(emptyList()) }
+    var isAiChatSending by remember { mutableStateOf(false) }
+    var aiChatModelUsed by remember { mutableStateOf(AiBudgetAdvisor.lastUsedModel()) }
     var prefilledAmount by remember { mutableStateOf("") }
     var prefilledMerchant by remember { mutableStateOf("") }
+
+    val sendAiChatQuestion: (String) -> Unit = { rawQuestion ->
+        val cleanQuestion = rawQuestion.trim()
+        if (cleanQuestion.isNotEmpty() && !isAiChatSending) {
+            val historyBeforeQuestion = aiChatMessages.toList()
+            aiChatMessages = aiChatMessages + AiChatMessage(
+                role = AiChatRole.USER,
+                text = cleanQuestion
+            )
+            isAiChatSending = true
+            scope.launch {
+                val snapshot = withContext(Dispatchers.Default) {
+                    AiDatabaseContextBuilder.build(
+                        question = cleanQuestion,
+                        expenses = confirmedExpenses,
+                        registry = categoryRegistry,
+                        monthlyBudgetRub = monthlyBudgetRub,
+                        recurringPayments = recurringPayments,
+                        savingsGoals = savingsGoals
+                    )
+                }
+                val result = AiBudgetAdvisor.askFinancialAdvisorChat(
+                    apiKey = geminiApiKey,
+                    history = historyBeforeQuestion,
+                    userQuestion = cleanQuestion,
+                    contextSnapshot = snapshot
+                )
+                result.onSuccess { reply ->
+                    aiChatModelUsed = reply.modelUsed
+                    aiChatMessages = aiChatMessages + AiChatMessage(
+                        role = AiChatRole.MODEL,
+                        text = reply.text,
+                        modelUsed = reply.modelUsed,
+                        contextSummary = snapshot.shortUiNote()
+                    )
+                }.onFailure { err ->
+                    aiChatMessages = aiChatMessages + AiChatMessage(
+                        role = AiChatRole.MODEL,
+                        text = err.message ?: "Не удалось получить ответ от Gemini.",
+                        isError = true,
+                        contextSummary = snapshot.shortUiNote()
+                    )
+                }
+                isAiChatSending = false
+            }
+        }
+    }
 
     LaunchedEffect(openAddSheetTrigger) {
         if (openAddSheetTrigger) {
@@ -495,19 +550,21 @@ fun FamilyBudgetApp(
             }
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = {
-                    editingExpense = null
-                    prefilledAmount = ""
-                    prefilledMerchant = ""
-                    showAddEditSheet = true
-                },
-                shape = RoundedCornerShape(16.dp),
-                containerColor = palette.accentEmerald,
-                contentColor = Color.White,
-                icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                text = { Text("Операция ₽", fontWeight = FontWeight.Bold) }
-            )
+            if (!(isUnfoldedFoldable && isAiChatOpen)) {
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        editingExpense = null
+                        prefilledAmount = ""
+                        prefilledMerchant = ""
+                        showAddEditSheet = true
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                    containerColor = palette.accentEmerald,
+                    contentColor = Color.White,
+                    icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
+                    text = { Text("Операция ₽", fontWeight = FontWeight.Bold) }
+                )
+            }
         },
         bottomBar = {
             if (!isUnfoldedFoldable) {
@@ -642,7 +699,15 @@ fun FamilyBudgetApp(
                             }
                         },
                         allExpenses = confirmedExpenses,
-                        categoryRegistry = categoryRegistry
+                        categoryRegistry = categoryRegistry,
+                        isAiChatOpen = isAiChatOpen,
+                        onOpenAiChat = { isAiChatOpen = true },
+                        onCloseAiChat = { isAiChatOpen = false },
+                        aiChatMessages = aiChatMessages,
+                        isAiChatSending = isAiChatSending,
+                        aiChatModelUsed = aiChatModelUsed,
+                        onSendAiChatQuestion = sendAiChatQuestion,
+                        onClearAiChat = { if (!isAiChatSending) aiChatMessages = emptyList() }
                     )
                 }
             }
@@ -719,7 +784,15 @@ fun FamilyBudgetApp(
                             }
                         },
                         allExpenses = confirmedExpenses,
-                        categoryRegistry = categoryRegistry
+                        categoryRegistry = categoryRegistry,
+                        isAiChatOpen = isAiChatOpen,
+                        onOpenAiChat = { isAiChatOpen = true },
+                        onCloseAiChat = { isAiChatOpen = false },
+                        aiChatMessages = aiChatMessages,
+                        isAiChatSending = isAiChatSending,
+                        aiChatModelUsed = aiChatModelUsed,
+                        onSendAiChatQuestion = sendAiChatQuestion,
+                        onClearAiChat = { if (!isAiChatSending) aiChatMessages = emptyList() }
                     )
                 }
             }
@@ -1039,6 +1112,23 @@ fun FamilyBudgetApp(
                 }
             },
             onDismiss = { showSavingsGoalsSheet = false }
+        )
+    }
+
+    if (!isUnfoldedFoldable && isAiChatOpen) {
+        AiChatSheet(
+            messages = aiChatMessages,
+            isSending = isAiChatSending,
+            activeModelName = aiChatModelUsed ?: AiBudgetAdvisor.lastUsedModel(),
+            totalRecordsCount = confirmedExpenses.size,
+            geminiApiKey = geminiApiKey,
+            onSendQuestion = sendAiChatQuestion,
+            onClearChat = { if (!isAiChatSending) aiChatMessages = emptyList() },
+            onOpenSettings = {
+                isAiChatOpen = false
+                showSettingsSheet = true
+            },
+            onDismiss = { isAiChatOpen = false }
         )
     }
 }

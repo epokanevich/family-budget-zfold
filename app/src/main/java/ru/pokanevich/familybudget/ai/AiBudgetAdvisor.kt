@@ -20,6 +20,7 @@ import ru.pokanevich.familybudget.ui.util.PeriodWindow
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 import kotlin.math.roundToInt
 
 data class CategoryDiagnosis(
@@ -76,9 +77,38 @@ data class CloudAiAdvice(
     val attemptsCount: Int
 )
 
+enum class AiChatRole {
+    USER,
+    MODEL
+}
+
+data class AiChatMessage(
+    val id: String = UUID.randomUUID().toString(),
+    val role: AiChatRole,
+    val text: String,
+    val modelUsed: String? = null,
+    val contextSummary: String? = null,
+    val isError: Boolean = false,
+    val createdAtMs: Long = System.currentTimeMillis()
+)
+
+data class CloudAiChatReply(
+    val text: String,
+    val modelUsed: String,
+    val attemptsCount: Int
+)
+
+internal class GeminiHttpException(
+    val statusCode: Int,
+    val errorBody: String
+) : IllegalStateException("HTTP $statusCode ${errorBody.take(120)}")
+
 object AiBudgetAdvisor {
 
-    private val PRIORITIZED_FREE_MODELS = listOf(
+    const val CHAT_HISTORY_WINDOW_SIZE = 8
+    private const val MAX_DISCOVERED_FALLBACK_MODELS = 3
+
+    internal val PRIORITIZED_FREE_MODELS = listOf(
         "gemini-flash-latest",
         "gemini-flash-lite-latest",
         "gemini-3.5-flash-lite",
@@ -95,6 +125,44 @@ object AiBudgetAdvisor {
         "tts", "image", "lyria", "banana", "transcribe", "robotics",
         "computer-use", "deep-research", "antigravity", "embedding"
     )
+
+    private val CHAT_SYSTEM_INSTRUCTION = """
+        Ты — персональный семейный финансовый советник для пары (Евгений и Анжелика, общий бюджет без деления на личные счета).
+        Отвечай на русском языке: дружелюбно, конкретно, с цифрами в ₽, без воды (обычно 3–7 предложений или короткий маркированный список).
+        Правила работы с данными:
+        1. Опирайся ТОЛЬКО на сводку семейной базы, агрегаты поиска и приложенные операции из текущего вопроса. Никогда не выдумывай числа, категории или операции.
+        2. Переводы (TRANSFER), включая пополнение и снятие семейных копилок, не являются расходами или доходами месяца.
+        3. Если к вопросу приложена выборка (до 50 операций), а в блоке поиска указана сумма по ВСЕМ найденным операциям, для итогов и сравнений используй сумму по всем найденным, а выборку используй для примеров и деталей.
+        4. Если в переданном срезе не хватает данных для точного ответа, прямо напиши об этом и подскажи, как уточнить вопрос (например, назвать категорию, магазин или месяц).
+    """.trimIndent()
+
+    @Volatile
+    private var lastSuccessfulModel: String? = null
+
+    @Volatile
+    internal var modelCaller: (apiKey: String, model: String, bodyJson: String) -> Result<String> =
+        ::callGeminiModel
+
+    @Volatile
+    internal var availableModelsFetcher: (apiKey: String) -> List<String> =
+        ::fetchAvailableTextModels
+
+    fun lastUsedModel(): String? = lastSuccessfulModel
+
+    internal fun resetForTest() {
+        lastSuccessfulModel = null
+        modelCaller = ::callGeminiModel
+        availableModelsFetcher = ::fetchAvailableTextModels
+    }
+
+    internal fun orderedCandidateModels(preferred: String? = lastSuccessfulModel): List<String> {
+        val cleanPreferred = preferred?.trim()?.takeIf { it.isNotBlank() }
+        return if (cleanPreferred != null) {
+            listOf(cleanPreferred) + PRIORITIZED_FREE_MODELS.filter { it != cleanPreferred }
+        } else {
+            PRIORITIZED_FREE_MODELS
+        }
+    }
 
     fun buildInstantLocalReport(
         expenses: List<ExpenseEntity>,
@@ -358,45 +426,188 @@ object AiBudgetAdvisor {
                 ))
             }.toString()
 
-            val triedModels = linkedSetOf<String>()
-            var attempts = 0
-            var lastError = "Не удалось получить ответ ни от одной модели"
-
-            // 1. Сначала перебираем приоритетные бесплатные быстрые модели
-            for (model in PRIORITIZED_FREE_MODELS) {
-                triedModels.add(model)
-                attempts++
-                val attemptResult = callGeminiModel(cleanKey, model, bodyJson)
-                if (attemptResult.isSuccess) {
-                    return@runCatching CloudAiAdvice(
-                        text = attemptResult.getOrThrow(),
-                        modelUsed = model,
-                        attemptsCount = attempts
-                    )
-                }
-                lastError = "$model: ${attemptResult.exceptionOrNull()?.message}"
-            }
-
-            // 2. Если все приоритетные перегружены/недоступны — динамически запрашиваем полный список моделей API и перебираем все текстовые
-            val discoveredModels = fetchAvailableTextModels(cleanKey)
-                .filter { it !in triedModels }
-
-            for (model in discoveredModels) {
-                triedModels.add(model)
-                attempts++
-                val attemptResult = callGeminiModel(cleanKey, model, bodyJson)
-                if (attemptResult.isSuccess) {
-                    return@runCatching CloudAiAdvice(
-                        text = attemptResult.getOrThrow(),
-                        modelUsed = model,
-                        attemptsCount = attempts
-                    )
-                }
-                lastError = "$model: ${attemptResult.exceptionOrNull()?.message}"
-            }
-
-            throw IllegalStateException("Перебрано моделей: $attempts. Последняя ошибка: $lastError")
+            val res = executeWithModelFallback(cleanKey, bodyJson)
+            CloudAiAdvice(
+                text = res.text,
+                modelUsed = res.modelUsed,
+                attemptsCount = res.attemptsCount
+            )
         }
+    }
+
+    /**
+     * Диалоговый запрос к Gemini по семейной базе:
+     * - передаёт системную инструкцию, компактный срез [contextSnapshot] и скользящее окно последних
+     *   [CHAT_HISTORY_WINDOW_SIZE] сообщений диалога;
+     * - первой пробует последнюю успешную модель;
+     * - при HTTP 429 (или 401/403) сразу возвращает понятную ошибку без лишнего перебора моделей.
+     */
+    suspend fun askFinancialAdvisorChat(
+        apiKey: String,
+        history: List<AiChatMessage>,
+        userQuestion: String,
+        contextSnapshot: AiChatContextSnapshot
+    ): Result<CloudAiChatReply> = withContext(Dispatchers.IO) {
+        runCatching {
+            val cleanKey = apiKey.trim()
+            if (cleanKey.isBlank()) throw IllegalStateException("Не задан API-ключ Gemini")
+            val cleanQuestion = userQuestion.trim()
+            if (cleanQuestion.isBlank()) throw IllegalArgumentException("Введите вопрос для советника")
+
+            val bodyJson = buildChatRequestJson(
+                history = history,
+                userQuestion = cleanQuestion,
+                contextSnapshot = contextSnapshot,
+                historyLimit = CHAT_HISTORY_WINDOW_SIZE
+            )
+            executeWithModelFallback(cleanKey, bodyJson)
+        }
+    }
+
+    internal fun buildChatRequestJson(
+        history: List<AiChatMessage>,
+        userQuestion: String,
+        contextSnapshot: AiChatContextSnapshot,
+        historyLimit: Int = CHAT_HISTORY_WINDOW_SIZE
+    ): String {
+        val windowMessages = normalizeHistoryWindow(history, historyLimit)
+        val contentsArray = JSONArray()
+
+        for ((role, text) in windowMessages) {
+            contentsArray.put(
+                JSONObject().apply {
+                    put("role", if (role == AiChatRole.USER) "user" else "model")
+                    put("parts", JSONArray().put(JSONObject().put("text", text)))
+                }
+            )
+        }
+
+        val currentTurnText = buildString {
+            appendLine(contextSnapshot.toPromptText())
+            appendLine()
+            appendLine("Вопрос пользователя:")
+            append(userQuestion.trim())
+        }
+
+        // Гарантируем, что текущий вопрос не нарушает чередование ролей Gemini API.
+        if (windowMessages.lastOrNull()?.first == AiChatRole.USER) {
+            val lastIdx = contentsArray.length() - 1
+            val prevText = windowMessages.last().second
+            contentsArray.put(
+                lastIdx,
+                JSONObject().apply {
+                    put("role", "user")
+                    put("parts", JSONArray().put(JSONObject().put("text", "$prevText\n\n$currentTurnText")))
+                }
+            )
+        } else {
+            contentsArray.put(
+                JSONObject().apply {
+                    put("role", "user")
+                    put("parts", JSONArray().put(JSONObject().put("text", currentTurnText)))
+                }
+            )
+        }
+
+        return JSONObject().apply {
+            put(
+                "system_instruction",
+                JSONObject().put(
+                    "parts",
+                    JSONArray().put(JSONObject().put("text", CHAT_SYSTEM_INSTRUCTION))
+                )
+            )
+            put("contents", contentsArray)
+            put(
+                "generationConfig",
+                JSONObject().apply {
+                    put("temperature", 0.35)
+                    put("maxOutputTokens", 1200)
+                }
+            )
+        }.toString()
+    }
+
+    private fun normalizeHistoryWindow(
+        history: List<AiChatMessage>,
+        historyLimit: Int
+    ): List<Pair<AiChatRole, String>> {
+        val recent = history
+            .asSequence()
+            .filter { !it.isError && it.text.isNotBlank() }
+            .toList()
+            .takeLast(historyLimit.coerceAtLeast(0))
+
+        // Gemini contents всегда должен начинаться с реплики user.
+        val firstUserIdx = recent.indexOfFirst { it.role == AiChatRole.USER }
+        if (firstUserIdx < 0) return emptyList()
+
+        val merged = mutableListOf<Pair<AiChatRole, String>>()
+        for (msg in recent.drop(firstUserIdx)) {
+            val cleanText = msg.text.trim()
+            if (cleanText.isEmpty()) continue
+            val last = merged.lastOrNull()
+            if (last != null && last.first == msg.role) {
+                merged[merged.lastIndex] = msg.role to "${last.second}\n\n$cleanText"
+            } else {
+                merged.add(msg.role to cleanText)
+            }
+        }
+        return merged
+    }
+
+    private fun executeWithModelFallback(cleanKey: String, bodyJson: String): CloudAiChatReply {
+        val candidates = orderedCandidateModels()
+        val triedModels = linkedSetOf<String>()
+        var attempts = 0
+        var lastError = "Не удалось получить ответ ни от одной модели"
+
+        fun tryModel(model: String): CloudAiChatReply? {
+            triedModels.add(model)
+            attempts++
+            val attemptResult = modelCaller(cleanKey, model, bodyJson)
+            if (attemptResult.isSuccess) {
+                lastSuccessfulModel = model
+                return CloudAiChatReply(
+                    text = attemptResult.getOrThrow(),
+                    modelUsed = model,
+                    attemptsCount = attempts
+                )
+            }
+            val err = attemptResult.exceptionOrNull()
+            if (err is GeminiHttpException) {
+                when (err.statusCode) {
+                    429 -> throw IllegalStateException(
+                        "Превышен лимит запросов Gemini (HTTP 429, модель $model). Подождите 30–60 секунд и повторите вопрос."
+                    )
+                    401, 403 -> throw IllegalStateException(
+                        "Ключ Gemini API недействителен или нет доступа (HTTP ${err.statusCode}). Проверьте ключ в настройках."
+                    )
+                    404 -> if (lastSuccessfulModel == model) {
+                        lastSuccessfulModel = null
+                    }
+                }
+            }
+            lastError = "$model: ${err?.message}"
+            return null
+        }
+
+        // 1. Сначала пробуем запомненную рабочую модель, затем приоритетный список Free Tier.
+        for (model in candidates) {
+            tryModel(model)?.let { return it }
+        }
+
+        // 2. Только если все приоритетные модели недоступны (например, 404 после смены версий API),
+        // подтягиваем актуальный список текстовых моделей и пробуем до MAX_DISCOVERED_FALLBACK_MODELS.
+        val discoveredModels = availableModelsFetcher(cleanKey)
+            .filter { it !in triedModels }
+            .take(MAX_DISCOVERED_FALLBACK_MODELS)
+
+        for (model in discoveredModels) {
+            tryModel(model)?.let { return it }
+        }
+
+        throw IllegalStateException("Не удалось получить ответ от Gemini (попыток: $attempts). $lastError")
     }
 
     private fun callGeminiModel(apiKey: String, model: String, bodyJson: String): Result<String> {
@@ -405,8 +616,8 @@ object AiBudgetAdvisor {
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-                connectTimeout = 10_000
-                readTimeout = 20_000
+                connectTimeout = 12_000
+                readTimeout = 25_000
                 doOutput = true
             }
             try {
@@ -418,19 +629,45 @@ object AiBudgetAdvisor {
                     conn.inputStream.bufferedReader().readText()
                 } else {
                     val err = conn.errorStream?.bufferedReader()?.readText().orEmpty()
-                    throw IllegalStateException("HTTP $code ${err.take(120)}")
+                    throw GeminiHttpException(code, err)
                 }
-                val root = JSONObject(responseText)
-                val candidates = root.getJSONArray("candidates")
-                val content = candidates.getJSONObject(0).getJSONObject("content")
-                val parts = content.getJSONArray("parts")
-                val text = parts.getJSONObject(0).getString("text").trim()
-                if (text.isBlank()) throw IllegalStateException("Пустой ответ")
-                text
+                extractCandidateText(responseText)
             } finally {
                 conn.disconnect()
             }
         }
+    }
+
+    internal fun extractCandidateText(responseText: String): String {
+        val root = JSONObject(responseText)
+        val candidates = root.optJSONArray("candidates")
+            ?: throw IllegalStateException("Gemini не вернул вариантов ответа")
+        if (candidates.length() == 0) {
+            throw IllegalStateException("Пустой ответ от Gemini")
+        }
+        val firstCandidate = candidates.getJSONObject(0)
+        val content = firstCandidate.optJSONObject("content")
+            ?: throw IllegalStateException("Ответ заблокирован или пуст (${firstCandidate.optString("finishReason", "unknown")})")
+        val parts = content.optJSONArray("parts")
+            ?: throw IllegalStateException("Пустое содержимое ответа")
+
+        val visibleParts = mutableListOf<String>()
+        val fallbackParts = mutableListOf<String>()
+        for (i in 0 until parts.length()) {
+            val part = parts.optJSONObject(i) ?: continue
+            val text = part.optString("text", "").trim()
+            if (text.isBlank()) continue
+            if (part.optBoolean("thought", false)) {
+                fallbackParts.add(text)
+            } else {
+                visibleParts.add(text)
+            }
+        }
+        val result = (if (visibleParts.isNotEmpty()) visibleParts else fallbackParts)
+            .joinToString("\n\n")
+            .trim()
+        if (result.isBlank()) throw IllegalStateException("Пустой ответ")
+        return result
     }
 
     private fun fetchAvailableTextModels(apiKey: String): List<String> {
