@@ -56,7 +56,7 @@ import kotlinx.coroutines.launch
 import ru.pokanevich.familybudget.ai.AiBudgetAdvisor
 import ru.pokanevich.familybudget.ai.AiBudgetReport
 import ru.pokanevich.familybudget.ai.CategoryDiagnosis
-import ru.pokanevich.familybudget.data.ExpenseCategory
+import ru.pokanevich.familybudget.data.CategoryDescriptor
 import ru.pokanevich.familybudget.ui.theme.AuthorAvatarCircle
 import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
@@ -67,7 +67,7 @@ import ru.pokanevich.familybudget.ui.util.PeriodWindow
 import kotlin.math.roundToInt
 
 private data class ChartSlice(
-    val category: ExpenseCategory,
+    val category: CategoryDescriptor,
     val amountRub: Double,
     val count: Int
 )
@@ -91,7 +91,7 @@ fun AiAnalyticsPane(
     var cloudAdvice by remember { mutableStateOf<String?>(null) }
     var cloudModelUsed by remember { mutableStateOf<String?>(null) }
     var isLoadingCloudAi by remember { mutableStateOf(false) }
-    var selectedChartCategory by remember { mutableStateOf<ExpenseCategory?>(null) }
+    var selectedChartCategoryId by remember { mutableStateOf<String?>(null) }
     var showIncomesInChart by remember { mutableStateOf(false) }
 
     Column(
@@ -120,11 +120,11 @@ fun AiAnalyticsPane(
             showIncomes = showIncomesInChart,
             onToggleMode = { incomesMode ->
                 showIncomesInChart = incomesMode
-                selectedChartCategory = null
+                selectedChartCategoryId = null
             },
-            selectedCategory = selectedChartCategory,
+            selectedCategoryId = selectedChartCategoryId,
             onSelectCategory = { cat ->
-                selectedChartCategory = if (selectedChartCategory == cat) null else cat
+                selectedChartCategoryId = if (selectedChartCategoryId == cat.id) null else cat.id
             }
         )
 
@@ -279,8 +279,8 @@ private fun CategoryDonutCard(
     report: AiBudgetReport,
     showIncomes: Boolean,
     onToggleMode: (Boolean) -> Unit,
-    selectedCategory: ExpenseCategory?,
-    onSelectCategory: (ExpenseCategory) -> Unit
+    selectedCategoryId: String?,
+    onSelectCategory: (CategoryDescriptor) -> Unit
 ) {
     val palette = LocalFamilyPalette.current
     val slices = remember(report, showIncomes) {
@@ -306,7 +306,7 @@ private fun CategoryDonutCard(
         label = "donutSweep"
     )
 
-    val selectedSlice = slices.firstOrNull { it.category == selectedCategory }
+    val selectedSlice = slices.firstOrNull { it.category.id == selectedCategoryId }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -406,8 +406,8 @@ private fun CategoryDonutCard(
                             val sweep = share * availableDegrees * sweepScale
                             val vis = slice.category.visual()
                             val sliceColor = if (palette.isDark) vis.darkModeColor else vis.color
-                            val isSelected = selectedCategory == slice.category
-                            val isDimmed = selectedCategory != null && !isSelected
+                            val isSelected = selectedCategoryId == slice.category.id
+                            val isDimmed = selectedCategoryId != null && !isSelected
 
                             val strokeWidth = if (isSelected) baseStroke + selectedExtra else baseStroke
                             val inset = strokeWidth / 2f
@@ -481,7 +481,7 @@ private fun CategoryDonutCard(
                                 val vis = slice.category.visual()
                                 val dotColor = if (palette.isDark) vis.darkModeColor else vis.color
                                 val pct = ((slice.amountRub / total) * 100.0).roundToInt()
-                                val isSelected = selectedCategory == slice.category
+                                val isSelected = selectedCategoryId == slice.category.id
 
                                 Surface(
                                     modifier = Modifier

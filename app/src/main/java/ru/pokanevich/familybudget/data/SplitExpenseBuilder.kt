@@ -5,9 +5,19 @@ import kotlin.math.abs
 
 data class SplitPartInput(
     val amountRub: Double,
-    val category: ExpenseCategory,
+    val categoryId: String,
     val note: String = ""
-)
+) {
+    constructor(
+        amountRub: Double,
+        category: ExpenseCategory,
+        note: String = ""
+    ) : this(
+        amountRub = amountRub,
+        categoryId = category.name,
+        note = note
+    )
+}
 
 object SplitExpenseBuilder {
 
@@ -61,7 +71,7 @@ object SplitExpenseBuilder {
                 id = if (isFirstOfOriginal) original!!.id else UUID.randomUUID().toString(),
                 amountRub = part.amountRub,
                 merchant = cleanMerchant,
-                categoryName = part.category.name,
+                categoryName = part.categoryId,
                 authorName = authorName,
                 sourceType = effectiveSourceType,
                 isPendingConfirmation = false,

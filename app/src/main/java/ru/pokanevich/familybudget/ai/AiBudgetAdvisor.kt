@@ -4,7 +4,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
-import ru.pokanevich.familybudget.data.ExpenseCategory
+import ru.pokanevich.familybudget.data.CategoryDescriptor
+import ru.pokanevich.familybudget.data.CategoryLimitMode
+import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
 import ru.pokanevich.familybudget.ui.util.BudgetPeriod
 import ru.pokanevich.familybudget.ui.util.Formatters
@@ -16,7 +18,7 @@ import java.net.URL
 import kotlin.math.roundToInt
 
 data class CategoryDiagnosis(
-    val category: ExpenseCategory,
+    val category: CategoryDescriptor,
     val spentRub: Double,
     val recommendedLimitRub: Double,
     val expectedByTodayRub: Double,
@@ -28,7 +30,7 @@ data class CategoryDiagnosis(
 }
 
 data class IncomeCategoryBreakdown(
-    val category: ExpenseCategory,
+    val category: CategoryDescriptor,
     val amountRub: Double,
     val transactionCount: Int
 )
@@ -88,25 +90,26 @@ object AiBudgetAdvisor {
     fun buildInstantLocalReport(
         expenses: List<ExpenseEntity>,
         monthlyBudgetRub: Double,
-        window: PeriodWindow = PeriodCalculator.buildWindow(BudgetPeriod.MONTH, System.currentTimeMillis())
+        window: PeriodWindow = PeriodCalculator.buildWindow(BudgetPeriod.MONTH, System.currentTimeMillis()),
+        registry: CategoryRegistry = CategoryRegistry.DEFAULT
     ): AiBudgetReport {
         val activeAll = expenses.filter {
-            !it.isDeleted && !it.isPendingConfirmation && !it.isTransfer
+            !it.isDeleted && !it.isPendingConfirmation && !it.isTransfer(registry)
         }
 
         // Общий баланс за всё время (как "Итого" в Money Manager)
-        val allTimeIncome = activeAll.filter { it.isIncome }.sumOf { it.amountRub }
-        val allTimeExpense = activeAll.filter { !it.isIncome }.sumOf { it.amountRub }
+        val allTimeIncome = activeAll.filter { it.isIncome(registry) }.sumOf { it.amountRub }
+        val allTimeExpense = activeAll.filter { !it.isIncome(registry) }.sumOf { it.amountRub }
         val allTimeBalance = allTimeIncome - allTimeExpense
 
-        val periodItems = (if (window.period == BudgetPeriod.ALL) {
+        val periodItems = if (window.period == BudgetPeriod.ALL) {
             activeAll
         } else {
             activeAll.filter { it.createdAtEpochMs in window.startMs..window.endMs }
-        }).filter { !it.isTransfer }
+        }
 
-        val periodExpenses = periodItems.filter { !it.isIncome }
-        val periodIncomes = periodItems.filter { it.isIncome }
+        val periodExpenses = periodItems.filter { !it.isIncome(registry) }
+        val periodIncomes = periodItems.filter { it.isIncome(registry) }
 
         val totalSpent = periodExpenses.sumOf { it.amountRub }
         val totalIncome = periodIncomes.sumOf { it.amountRub }
@@ -130,15 +133,34 @@ object AiBudgetAdvisor {
         val eugeneExpenses = periodExpenses.filter { it.authorName.equals("Евгений", ignoreCase = true) }
         val anzhelikaExpenses = periodExpenses.filter { it.authorName.equals("Анжелика", ignoreCase = true) }
 
-        val diagnoses = ExpenseCategory.expenseCategories.map { cat ->
-            val catExpenses = periodExpenses.filter { it.category == cat }
+        val expensesByCategoryId = periodExpenses.groupBy { registry.resolve(it.categoryName).id }
+        val activeExpenseCats = registry.expenseCategories
+        val activeExpenseIds = activeExpenseCats.map { it.id }.toSet()
+        // Архивные или пока неизвестные категории с операциями за период сохраняем в отчёте, чтобы история не терялась
+        val extraExpenseCats = periodExpenses
+            .map { registry.resolve(it.categoryName) }
+            .filter { it.id !in activeExpenseIds }
+            .distinctBy { it.id }
+
+        val diagnoses = (activeExpenseCats + extraExpenseCats).map { cat ->
+            val catExpenses = expensesByCategoryId[cat.id].orEmpty()
             val catSpent = catExpenses.sumOf { it.amountRub }
-            val catLimit = periodBudget * (cat.recommendedSharePercent / 100.0)
+            val catLimit = when (cat.limitMode) {
+                CategoryLimitMode.PERCENT -> periodBudget * (cat.limitValue / 100.0)
+                CategoryLimitMode.FIXED_RUB -> when (window.period) {
+                    BudgetPeriod.DAY -> cat.limitValue / 30.0
+                    BudgetPeriod.WEEK -> cat.limitValue * 7.0 / 30.0
+                    BudgetPeriod.MONTH -> cat.limitValue
+                    BudgetPeriod.YEAR -> cat.limitValue * 12.0
+                    BudgetPeriod.ALL -> 0.0
+                }
+            }
             val catExpectedToday = catLimit * window.progressRatio.toDouble()
             val diff = catSpent - catExpectedToday
 
             val status = when {
                 window.period == BudgetPeriod.ALL -> CategoryDiagnosis.Status.ON_TRACK
+                catLimit <= 0.0 -> CategoryDiagnosis.Status.ON_TRACK
                 catSpent > catLimit -> CategoryDiagnosis.Status.OVERBURNED
                 window.isCurrentPeriod && diff > catLimit * 0.18 -> CategoryDiagnosis.Status.OVERBURNED
                 catExpectedToday - catSpent > catLimit * 0.20 -> CategoryDiagnosis.Status.CAN_SPLURGE
@@ -146,7 +168,7 @@ object AiBudgetAdvisor {
             }
 
             val msg = when {
-                window.period == BudgetPeriod.ALL ->
+                window.period == BudgetPeriod.ALL || catLimit <= 0.0 ->
                     "${catExpenses.size} оп."
                 status == CategoryDiagnosis.Status.OVERBURNED -> {
                     val overRub = (catSpent - catExpectedToday).roundToInt().coerceAtLeast(0)
@@ -174,8 +196,16 @@ object AiBudgetAdvisor {
             )
         }
 
-        val incomeBreakdown = ExpenseCategory.incomeCategories.map { cat ->
-            val catIncomes = periodIncomes.filter { it.category == cat }
+        val incomesByCategoryId = periodIncomes.groupBy { registry.resolve(it.categoryName).id }
+        val activeIncomeCats = registry.incomeCategories
+        val activeIncomeIds = activeIncomeCats.map { it.id }.toSet()
+        val extraIncomeCats = periodIncomes
+            .map { registry.resolve(it.categoryName) }
+            .filter { it.id !in activeIncomeIds }
+            .distinctBy { it.id }
+
+        val incomeBreakdown = (activeIncomeCats + extraIncomeCats).map { cat ->
+            val catIncomes = incomesByCategoryId[cat.id].orEmpty()
             IncomeCategoryBreakdown(
                 category = cat,
                 amountRub = catIncomes.sumOf { it.amountRub },

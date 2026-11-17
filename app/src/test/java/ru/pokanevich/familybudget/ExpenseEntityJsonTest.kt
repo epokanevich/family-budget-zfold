@@ -302,4 +302,25 @@ class ExpenseEntityJsonTest {
         assertTrue(unknownOp.isIncome)
         assertFalse(unknownOp.isTransfer)
     }
+
+    @Test
+    fun roundTrip_unknownCustomCategoryId_preservesCategoryNameWithoutOverwriting() {
+        val customId = "custom_1763300000_ab12"
+        val original = ExpenseEntity(
+            id = "custom-cat-op-1",
+            amountRub = 1250.0,
+            merchant = "Кофе с собой",
+            categoryName = customId,
+            createdAtEpochMs = 1763300000000L,
+            updatedAtEpochMs = 1763300000000L
+        )
+
+        val json = original.toJsonObject()
+        assertEquals(customId, json.getString("categoryName"))
+
+        val restored = ExpenseEntity.fromJsonObject(json)
+        assertNotNull(restored)
+        assertEquals(customId, restored!!.categoryName)
+        assertEquals(OperationType.EXPENSE, restored.effectiveOperationType)
+    }
 }

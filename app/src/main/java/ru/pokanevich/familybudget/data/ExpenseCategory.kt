@@ -5,31 +5,56 @@ enum class ExpenseCategory(
     val shortName: String,
     val emoji: String,
     val recommendedSharePercent: Int,
-    val isIncome: Boolean = false
+    val isIncome: Boolean = false,
+    val defaultColorHex: Long = 0xFF64748BL
 ) {
     // 14 категорий РАСХОДОВ (перенесены 1-в-1 из Money Manager)
-    GROCERIES("Продукты", "Продукты", "🛒", 20, false),
-    CAFES("Кафе", "Кафе", "☕", 7, false),
-    LEISURE("Досуг", "Досуг", "🎮", 2, false),
-    TRANSPORT("Транспорт", "Транспорт", "🚌", 4, false),
-    WORK_FOOD("Еда на работе", "На работе", "🍽️", 5, false),
-    HEALTH("Здоровье", "Здоровье", "❤️", 3, false),
-    SHOPPING("Покупки", "Покупки", "🛍️", 17, false),
-    GIFTS("Подарки", "Подарки", "🎁", 12, false),
-    UTILITIES("Коммунальные услуги", "Коммун.", "🏠", 10, false),
-    CREDIT("Кредит", "Кредит", "💳", 4, false),
-    PETS("Животные", "Животные", "🐾", 6, false),
-    MOTO("Моторасходники", "Мото", "🏍️", 4, false),
-    BABY("Малыш", "Малыш", "👶", 3, false),
-    OTHER("Другое", "Другое", "❓", 3, false),
+    GROCERIES("Продукты", "Продукты", "🛒", 20, false, 0xFF3A7DF0L),
+    CAFES("Кафе", "Кафе", "☕", 7, false, 0xFF9368CEL),
+    LEISURE("Досуг", "Досуг", "🎮", 2, false, 0xFF2FA393L),
+    TRANSPORT("Транспорт", "Транспорт", "🚌", 4, false, 0xFF2C62DFL),
+    WORK_FOOD("Еда на работе", "На работе", "🍽️", 5, false, 0xFF569E39L),
+    HEALTH("Здоровье", "Здоровье", "❤️", 3, false, 0xFF39B530L),
+    SHOPPING("Покупки", "Покупки", "🛍️", 17, false, 0xFFB85605L),
+    GIFTS("Подарки", "Подарки", "🎁", 12, false, 0xFFE53935L),
+    UTILITIES("Коммунальные услуги", "Коммун.", "🏠", 10, false, 0xFF1E4F99L),
+    CREDIT("Кредит", "Кредит", "💳", 4, false, 0xFF1A9AB8L),
+    PETS("Животные", "Животные", "🐾", 6, false, 0xFFD61980L),
+    MOTO("Моторасходники", "Мото", "🏍️", 4, false, 0xFF9EA800L),
+    BABY("Малыш", "Малыш", "👶", 3, false, 0xFF1EB5A6L),
+    OTHER("Другое", "Другое", "❓", 3, false, 0xFF64748BL),
 
     // 4 категории ДОХОДОВ (перенесены 1-в-1 из Money Manager)
-    INCOME_SALARY("Зарплата", "Зарплата", "💵", 0, true),
-    INCOME_GIFT("Подарок", "Подарок", "🎁", 0, true),
-    INCOME_INTEREST("Проценты по вкладу", "Проценты", "🏦", 0, true),
-    INCOME_OTHER("Другое (доход)", "Другое", "💰", 0, true);
+    INCOME_SALARY("Зарплата", "Зарплата", "💵", 0, true, 0xFF2C62DFL),
+    INCOME_GIFT("Подарок", "Подарок", "🎁", 0, true, 0xFFD62877L),
+    INCOME_INTEREST("Проценты по вкладу", "Проценты", "🏦", 0, true, 0xFF569E39L),
+    INCOME_OTHER("Другое (доход)", "Другое", "💰", 0, true, 0xFF059669L);
+
+    fun toDescriptor(): CategoryDescriptor = CategoryDescriptor(
+        id = name,
+        displayName = displayName,
+        shortName = shortName,
+        emoji = emoji,
+        colorHex = defaultColorHex,
+        isIncome = isIncome,
+        isBuiltIn = true,
+        limitMode = CategoryLimitMode.PERCENT,
+        limitValue = recommendedSharePercent.toDouble(),
+        isArchived = false,
+        updatedAtEpochMs = 0L
+    )
 
     companion object {
+        // Совместимость со старыми ключами v1/v2 (единый источник для ExpenseCategory и CategoryRegistry)
+        internal val LEGACY_STORED_ALIASES: Map<String, ExpenseCategory> = mapOf(
+            "BABY_AND_PETS" to PETS,
+            "CAFES_AND_DELIVERY" to CAFES,
+            "HOME_AND_UTILITIES" to UTILITIES,
+            "TRANSPORT_AND_MOTO" to TRANSPORT,
+            "HEALTH_AND_PHARMACY" to HEALTH,
+            "LEISURE_AND_HOBBIES" to LEISURE
+        )
+
         val expenseCategories: List<ExpenseCategory>
             get() = entries.filter { !it.isIncome }
 
@@ -37,16 +62,8 @@ enum class ExpenseCategory(
             get() = entries.filter { it.isIncome }
 
         fun fromStoredName(raw: String): ExpenseCategory {
-            return when (raw) {
-                // Совместимость со старыми ключами v1/v2
-                "BABY_AND_PETS" -> PETS
-                "CAFES_AND_DELIVERY" -> CAFES
-                "HOME_AND_UTILITIES" -> UTILITIES
-                "TRANSPORT_AND_MOTO" -> TRANSPORT
-                "HEALTH_AND_PHARMACY" -> HEALTH
-                "LEISURE_AND_HOBBIES" -> LEISURE
-                else -> runCatching { valueOf(raw) }.getOrDefault(OTHER)
-            }
+            LEGACY_STORED_ALIASES[raw]?.let { return it }
+            return runCatching { valueOf(raw) }.getOrDefault(OTHER)
         }
 
         fun fromMoneyManagerUid(uid: String?, isIncome: Boolean): ExpenseCategory {

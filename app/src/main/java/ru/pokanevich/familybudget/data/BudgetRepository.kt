@@ -432,9 +432,9 @@ class BudgetRepository private constructor(context: Context) {
         return entities
     }
 
-    suspend fun confirmPendingExpense(expense: ExpenseEntity, chosenCategory: ExpenseCategory) {
+    suspend fun confirmPendingExpense(expense: ExpenseEntity, categoryId: String) {
         val updated = expense.copy(
-            categoryName = chosenCategory.name,
+            categoryName = categoryId,
             isPendingConfirmation = false,
             updatedAtEpochMs = System.currentTimeMillis(),
             isSynced = false

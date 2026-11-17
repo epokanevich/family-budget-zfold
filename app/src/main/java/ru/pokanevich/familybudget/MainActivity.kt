@@ -90,6 +90,7 @@ import ru.pokanevich.familybudget.ai.AiBudgetAdvisor
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import ru.pokanevich.familybudget.data.BudgetRepository
+import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.CsvExporter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -187,6 +188,7 @@ fun FamilyBudgetApp(
     val pendingPushExpenses by repository.pendingPushExpenses.collectAsState(initial = emptyList())
     val syncState by repository.syncState.collectAsState()
     val isSyncing by repository.isSyncing.collectAsState()
+    val categoryRegistry = remember { CategoryRegistry.DEFAULT }
 
     var currentUserName by remember { mutableStateOf(repository.prefs.currentUserName) }
     var familySpaceCode by remember { mutableStateOf(repository.prefs.familySpaceCode) }
@@ -290,11 +292,12 @@ fun FamilyBudgetApp(
         }
     }
 
-    val aiReport = remember(confirmedExpenses, monthlyBudgetRub, periodWindow) {
+    val aiReport = remember(confirmedExpenses, monthlyBudgetRub, periodWindow, categoryRegistry) {
         AiBudgetAdvisor.buildInstantLocalReport(
             expenses = confirmedExpenses,
             monthlyBudgetRub = monthlyBudgetRub,
-            window = periodWindow
+            window = periodWindow,
+            registry = categoryRegistry
         )
     }
 
@@ -468,8 +471,8 @@ fun FamilyBudgetApp(
                             context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                         },
                         onRequestBatteryExemption = openBatteryExemption,
-                        onConfirmPending = { exp, cat ->
-                            scope.launch { repository.confirmPendingExpense(exp, cat) }
+                        onConfirmPending = { exp, categoryId ->
+                            scope.launch { repository.confirmPendingExpense(exp, categoryId) }
                         },
                         onDismissPending = { exp ->
                             scope.launch { repository.softDeleteExpense(exp) }
@@ -480,7 +483,8 @@ fun FamilyBudgetApp(
                             prefilledAmount = ""
                             prefilledMerchant = ""
                             showAddEditSheet = true
-                        }
+                        },
+                        registry = categoryRegistry
                     )
                 }
 
@@ -528,8 +532,8 @@ fun FamilyBudgetApp(
                             context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                         },
                         onRequestBatteryExemption = openBatteryExemption,
-                        onConfirmPending = { exp, cat ->
-                            scope.launch { repository.confirmPendingExpense(exp, cat) }
+                        onConfirmPending = { exp, categoryId ->
+                            scope.launch { repository.confirmPendingExpense(exp, categoryId) }
                         },
                         onDismissPending = { exp ->
                             scope.launch { repository.softDeleteExpense(exp) }
@@ -540,7 +544,8 @@ fun FamilyBudgetApp(
                             prefilledAmount = ""
                             prefilledMerchant = ""
                             showAddEditSheet = true
-                        }
+                        },
+                        registry = categoryRegistry
                     )
                 } else {
                     AiAnalyticsPane(
@@ -586,7 +591,8 @@ fun FamilyBudgetApp(
                         repository.restoreExpense(exp)
                     }
                 }
-            }
+            },
+            registry = categoryRegistry
         )
     }
 
@@ -605,7 +611,7 @@ fun FamilyBudgetApp(
                 showAddEditSheet = false
                 editingExpense = null
             },
-            onSave = { amount, merchant, category, author, note, operationType ->
+            onSave = { amount, merchant, categoryId, author, note, operationType ->
                 val existing = editingExpense
                 scope.launch {
                     if (existing != null) {
@@ -613,7 +619,7 @@ fun FamilyBudgetApp(
                             existing.copy(
                                 amountRub = amount,
                                 merchant = merchant,
-                                categoryName = category.name,
+                                categoryName = categoryId,
                                 authorName = author,
                                 note = note,
                                 operationType = operationType
@@ -624,7 +630,7 @@ fun FamilyBudgetApp(
                             ExpenseEntity(
                                 amountRub = amount,
                                 merchant = merchant,
-                                categoryName = category.name,
+                                categoryName = categoryId,
                                 authorName = author,
                                 sourceType = if (prefilledAmount.isNotEmpty()) "QR_RECEIPT" else "MANUAL",
                                 note = note,
@@ -655,7 +661,8 @@ fun FamilyBudgetApp(
                     prefilledAmount = ""
                     prefilledMerchant = ""
                 }
-            }
+            },
+            registry = categoryRegistry
         )
     }
 
@@ -692,12 +699,12 @@ fun FamilyBudgetApp(
                 val periodExpenses = confirmedExpenses.filter {
                     it.createdAtEpochMs in periodWindow.startMs..periodWindow.endMs
                 }
-                pendingCsvBytesToExport = CsvExporter.buildCsvBytes(periodExpenses)
+                pendingCsvBytesToExport = CsvExporter.buildCsvBytes(periodExpenses, registry = categoryRegistry)
                 val fileName = "family_budget_${selectedPeriod.name.lowercase()}.csv"
                 csvExportLauncher.launch(fileName)
             },
             onExportCsvAllTime = {
-                pendingCsvBytesToExport = CsvExporter.buildCsvBytes(confirmedExpenses)
+                pendingCsvBytesToExport = CsvExporter.buildCsvBytes(confirmedExpenses, registry = categoryRegistry)
                 val fileName = "family_budget_all.csv"
                 csvExportLauncher.launch(fileName)
             },

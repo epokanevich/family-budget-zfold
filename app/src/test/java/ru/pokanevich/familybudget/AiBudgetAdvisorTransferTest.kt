@@ -118,23 +118,23 @@ class AiBudgetAdvisorTransferTest {
         assertEquals(5_000.0, report.anzhelikaSpentRub, 0.001)
         assertEquals(1, report.anzhelikaCount)
 
-        val groceries = report.allCategories.first { it.category == ExpenseCategory.GROCERIES }
+        val groceries = report.allCategories.first { it.category.id == ExpenseCategory.GROCERIES.name }
         assertEquals(15_000.0, groceries.spentRub, 0.001)
         assertEquals(1, groceries.transactionCount)
 
-        val cafes = report.allCategories.first { it.category == ExpenseCategory.CAFES }
+        val cafes = report.allCategories.first { it.category.id == ExpenseCategory.CAFES.name }
         assertEquals(5_000.0, cafes.spentRub, 0.001)
         assertEquals(1, cafes.transactionCount)
 
-        val other = report.allCategories.first { it.category == ExpenseCategory.OTHER }
+        val other = report.allCategories.first { it.category.id == ExpenseCategory.OTHER.name }
         assertEquals(0.0, other.spentRub, 0.001)
         assertEquals(0, other.transactionCount)
 
-        val shopping = report.allCategories.first { it.category == ExpenseCategory.SHOPPING }
+        val shopping = report.allCategories.first { it.category.id == ExpenseCategory.SHOPPING.name }
         assertEquals(0.0, shopping.spentRub, 0.001)
         assertEquals(0, shopping.transactionCount)
 
-        val salaryBreakdown = report.incomeBreakdown.first { it.category == ExpenseCategory.INCOME_SALARY }
+        val salaryBreakdown = report.incomeBreakdown.first { it.category.id == ExpenseCategory.INCOME_SALARY.name }
         assertEquals(120_000.0, salaryBreakdown.amountRub, 0.001)
         assertEquals(1, salaryBreakdown.transactionCount)
     }

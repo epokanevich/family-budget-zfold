@@ -51,7 +51,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ru.pokanevich.familybudget.ai.AiBudgetReport
-import ru.pokanevich.familybudget.data.ExpenseCategory
+import ru.pokanevich.familybudget.data.CategoryDescriptor
+import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
 import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
@@ -204,15 +205,16 @@ fun ExpensesFeedPane(
     onJumpToCurrent: () -> Unit,
     onOpenPushSettings: () -> Unit,
     onRequestBatteryExemption: () -> Unit,
-    onConfirmPending: (ExpenseEntity, ExpenseCategory) -> Unit,
+    onConfirmPending: (ExpenseEntity, String) -> Unit,
     onDismissPending: (ExpenseEntity) -> Unit,
     onExpenseClick: (ExpenseEntity) -> Unit,
-    onAddClick: () -> Unit
+    onAddClick: () -> Unit,
+    registry: CategoryRegistry = CategoryRegistry.DEFAULT
 ) {
     val palette = LocalFamilyPalette.current
     var searchQuery by remember { mutableStateOf("") }
     var activeFilter by remember { mutableStateOf(FeedFilter.ALL) }
-    var selectedCategoryFilter by remember { mutableStateOf<ExpenseCategory?>(null) }
+    var selectedCategoryFilterId by remember { mutableStateOf<String?>(null) }
 
     val periodExpenses = remember(confirmedExpenses, window) {
         if (window.period == BudgetPeriod.ALL) {
@@ -222,33 +224,36 @@ fun ExpensesFeedPane(
         }
     }
 
-    val filteredExpenses = remember(periodExpenses, searchQuery, activeFilter, selectedCategoryFilter) {
+    val filteredExpenses = remember(periodExpenses, searchQuery, activeFilter, selectedCategoryFilterId, registry) {
         val q = searchQuery.trim().lowercase()
         periodExpenses.filter { exp ->
+            val resolvedCategory = registry.resolve(exp.categoryName)
+            val isInc = exp.isIncome(registry)
+            val isTr = exp.isTransfer(registry)
             val matchesQuery = q.isEmpty() ||
                 exp.merchant.lowercase().contains(q) ||
-                exp.category.displayName.lowercase().contains(q) ||
+                resolvedCategory.displayName.lowercase().contains(q) ||
                 exp.note.lowercase().contains(q)
             val matchesFilter = when (activeFilter) {
                 FeedFilter.ALL -> true
-                FeedFilter.EXPENSES -> !exp.isIncome && !exp.isTransfer
-                FeedFilter.INCOMES -> exp.isIncome
+                FeedFilter.EXPENSES -> !isInc && !isTr
+                FeedFilter.INCOMES -> isInc
                 FeedFilter.EUGENE -> exp.authorName.equals("Евгений", ignoreCase = true)
                 FeedFilter.ANZHELIKA -> exp.authorName.equals("Анжелика", ignoreCase = true)
             }
-            val matchesCategory = selectedCategoryFilter == null || exp.category == selectedCategoryFilter
+            val matchesCategory = selectedCategoryFilterId == null || resolvedCategory.id == selectedCategoryFilterId
             matchesQuery && matchesFilter && matchesCategory
         }
     }
 
-    val groupedByDay = remember(filteredExpenses) {
+    val groupedByDay = remember(filteredExpenses, registry) {
         filteredExpenses
             .groupBy { Formatters.dayKey(it.createdAtEpochMs) }
             .entries
             .sortedByDescending { it.key }
             .map { entry ->
-                val dayExpenseSum = entry.value.filter { !it.isIncome && !it.isTransfer }.sumOf { it.amountRub }
-                val dayIncomeSum = entry.value.filter { it.isIncome }.sumOf { it.amountRub }
+                val dayExpenseSum = entry.value.filter { !it.isIncome(registry) && !it.isTransfer(registry) }.sumOf { it.amountRub }
+                val dayIncomeSum = entry.value.filter { it.isIncome(registry) }.sumOf { it.amountRub }
                 DayExpenseGroup(
                     dayKey = entry.key,
                     headerTitle = Formatters.formatDayHeader(entry.value.first().createdAtEpochMs),
@@ -259,8 +264,8 @@ fun ExpensesFeedPane(
             }
     }
 
-    val activeCategories = remember(periodExpenses) {
-        periodExpenses.map { it.category }.distinct()
+    val activeCategories = remember(periodExpenses, registry) {
+        periodExpenses.map { registry.resolve(it.categoryName) }.distinctBy { it.id }
     }
 
     LazyColumn(
@@ -324,8 +329,9 @@ fun ExpensesFeedPane(
             items(pendingPushExpenses, key = { "pending_${it.id}" }) { pending ->
                 PendingPushCard(
                     expense = pending,
-                    onConfirm = { cat -> onConfirmPending(pending, cat) },
-                    onDismiss = { onDismissPending(pending) }
+                    onConfirm = { catId -> onConfirmPending(pending, catId) },
+                    onDismiss = { onDismissPending(pending) },
+                    registry = registry
                 )
             }
         }
@@ -343,7 +349,7 @@ fun ExpensesFeedPane(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         items(FeedFilter.entries) { filter ->
-                            val selected = activeFilter == filter && selectedCategoryFilter == null
+                            val selected = activeFilter == filter && selectedCategoryFilterId == null
                             FilterPillChip(
                                 label = filter.label,
                                 selected = selected,
@@ -357,20 +363,20 @@ fun ExpensesFeedPane(
                                 onClick = {
                                     activeFilter = filter
                                     if (filter == FeedFilter.ALL) {
-                                        selectedCategoryFilter = null
+                                        selectedCategoryFilterId = null
                                     }
                                 }
                             )
                         }
 
-                        items(activeCategories) { cat ->
-                            val selected = selectedCategoryFilter == cat
+                        items(activeCategories, key = { it.id }) { cat ->
+                            val selected = selectedCategoryFilterId == cat.id
                             FilterPillChip(
                                 label = cat.shortName,
                                 selected = selected,
                                 accentColor = palette.accentEmerald,
                                 onClick = {
-                                    selectedCategoryFilter = if (selected) null else cat
+                                    selectedCategoryFilterId = if (selected) null else cat.id
                                 }
                             )
                         }
@@ -386,7 +392,7 @@ fun ExpensesFeedPane(
                     onResetFilters = {
                         searchQuery = ""
                         activeFilter = FeedFilter.ALL
-                        selectedCategoryFilter = null
+                        selectedCategoryFilterId = null
                     },
                     onAddClick = onAddClick
                 )
@@ -441,6 +447,9 @@ fun ExpensesFeedPane(
                             group.items.forEachIndexed { index, expense ->
                                 ExpenseTransactionRow(
                                     expense = expense,
+                                    resolvedCategory = registry.resolve(expense.categoryName),
+                                    isIncome = expense.isIncome(registry),
+                                    isTransfer = expense.isTransfer(registry),
                                     onClick = { onExpenseClick(expense) }
                                 )
                                 if (index < group.items.lastIndex) {
@@ -470,13 +479,14 @@ private data class DayExpenseGroup(
 @Composable
 private fun ExpenseTransactionRow(
     expense: ExpenseEntity,
+    resolvedCategory: CategoryDescriptor,
+    isIncome: Boolean,
+    isTransfer: Boolean,
     onClick: () -> Unit
 ) {
     val palette = LocalFamilyPalette.current
     val isAnzhelika = expense.authorName.equals("Анжелика", ignoreCase = true)
     val authorColor = if (isAnzhelika) palette.anzhelikaColor else palette.eugeneColor
-    val isIncome = expense.isIncome
-    val isTransfer = expense.isTransfer
 
     val sourceTag = when (expense.sourceType) {
         "PUSH_SBER" -> "Сбер"
@@ -494,7 +504,7 @@ private fun ExpenseTransactionRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         CategoryIconBadge(
-            category = expense.category,
+            category = resolvedCategory,
             size = 42.dp,
             iconSize = 20.dp,
             cornerRadius = 13.dp
@@ -560,7 +570,7 @@ private fun ExpenseTransactionRow(
                     }
                 } else {
                     Text(
-                        text = expense.category.displayName,
+                        text = resolvedCategory.displayName,
                         style = MaterialTheme.typography.labelSmall,
                         color = palette.textSecondary,
                         maxLines = 1,

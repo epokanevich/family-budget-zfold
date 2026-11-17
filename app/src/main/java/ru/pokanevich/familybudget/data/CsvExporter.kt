@@ -24,7 +24,10 @@ object CsvExporter {
 
     private val FORMULA_CHARS = charArrayOf('=', '+', '-', '@')
 
-    fun buildCsvBytes(expenses: List<ExpenseEntity>): ByteArray {
+    fun buildCsvBytes(
+        expenses: List<ExpenseEntity>,
+        registry: CategoryRegistry = CategoryRegistry.DEFAULT
+    ): ByteArray {
         val filteredAndSorted = expenses
             .asSequence()
             .filter { !it.isDeleted && !it.isPendingConfirmation }
@@ -60,13 +63,13 @@ object CsvExporter {
             val dateStr = dateFormat.format(date)
             val timeStr = timeFormat.format(date)
 
-            val typeStr = when (expense.effectiveOperationType) {
+            val typeStr = when (expense.resolveOperationType(registry)) {
                 OperationType.EXPENSE -> "Расход"
                 OperationType.INCOME -> "Доход"
                 OperationType.TRANSFER -> "Перевод"
             }
 
-            val categoryStr = expense.category.displayName
+            val categoryStr = registry.resolve(expense.categoryName).displayName
             val amountStr = amountFormatter.format(expense.amountRub)
             val merchantStr = expense.merchant
             val noteStr = expense.note

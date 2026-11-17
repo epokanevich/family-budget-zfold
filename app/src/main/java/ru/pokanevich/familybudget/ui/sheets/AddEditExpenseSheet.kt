@@ -57,7 +57,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ru.pokanevich.familybudget.data.ExpenseCategory
+import ru.pokanevich.familybudget.data.CategoryDescriptor
+import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
 import ru.pokanevich.familybudget.data.OperationType
 import ru.pokanevich.familybudget.data.SplitExpenseBuilder
@@ -85,7 +86,7 @@ private val quickTransferTargets = listOf(
 private data class SplitPartDraft(
     val key: Int,
     val amountText: String,
-    val category: ExpenseCategory,
+    val category: CategoryDescriptor,
     val note: String
 )
 
@@ -101,7 +102,7 @@ fun AddEditExpenseSheet(
     onSave: (
         amountRub: Double,
         merchant: String,
-        category: ExpenseCategory,
+        categoryId: String,
         authorName: String,
         note: String,
         operationType: String
@@ -112,7 +113,8 @@ fun AddEditExpenseSheet(
         authorName: String,
         note: String,
         parts: List<SplitPartInput>
-    ) -> Unit
+    ) -> Unit,
+    registry: CategoryRegistry = CategoryRegistry.DEFAULT
 ) {
     val palette = LocalFamilyPalette.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -122,9 +124,9 @@ fun AddEditExpenseSheet(
         else -> initialAmount
     }
     val startMerchant = editingExpense?.merchant ?: initialMerchant
-    val startOperationType = editingExpense?.effectiveOperationType ?: OperationType.EXPENSE
-    val startCategory = editingExpense?.category
-        ?: ExpenseCategory.guessFromMerchant(startMerchant, startOperationType == OperationType.INCOME)
+    val startOperationType = editingExpense?.resolveOperationType(registry) ?: OperationType.EXPENSE
+    val startCategory = editingExpense?.let { registry.resolve(it.categoryName) }
+        ?: registry.guessFromMerchant(startMerchant, startOperationType == OperationType.INCOME)
     val startAuthor = editingExpense?.authorName ?: defaultAuthorName
     val startNote = editingExpense?.note.orEmpty()
 
@@ -132,21 +134,21 @@ fun AddEditExpenseSheet(
     var amountText by remember(editingExpense, initialAmount) { mutableStateOf(startAmount) }
     var merchantText by remember(editingExpense, initialMerchant) { mutableStateOf(startMerchant) }
     var noteText by remember(editingExpense) { mutableStateOf(startNote) }
-    var selectedCategory by remember(editingExpense, initialMerchant) { mutableStateOf(startCategory) }
+    var selectedCategory by remember(editingExpense, initialMerchant, registry) { mutableStateOf(startCategory) }
     var selectedAuthor by remember(editingExpense, defaultAuthorName) { mutableStateOf(startAuthor) }
     var isSplitMode by remember(editingExpense) { mutableStateOf(false) }
     var nextSplitKey by remember(editingExpense) { mutableIntStateOf(3) }
     var expandedCategoryPartKey by remember(editingExpense) { mutableStateOf<Int?>(null) }
+    val secondSplitDefault = if (startCategory.id == registry.defaultExpenseCategory.id) {
+        registry.resolve("SHOPPING")
+    } else {
+        registry.otherExpenseCategory
+    }
     var splitParts by remember(editingExpense) {
         mutableStateOf(
             listOf(
                 SplitPartDraft(1, "", startCategory, ""),
-                SplitPartDraft(
-                    2,
-                    "",
-                    if (startCategory == ExpenseCategory.GROCERIES) ExpenseCategory.SHOPPING else ExpenseCategory.OTHER,
-                    ""
-                )
+                SplitPartDraft(2, "", secondSplitDefault, "")
             )
         )
     }
@@ -156,9 +158,9 @@ fun AddEditExpenseSheet(
     val isExpenseMode = selectedOperationType == OperationType.EXPENSE
 
     val activeCategories = if (isIncomeMode) {
-        ExpenseCategory.incomeCategories
+        registry.incomeCategories
     } else {
-        ExpenseCategory.expenseCategories
+        registry.expenseCategories
     }
 
     val evaluatedAmount = remember(amountText) { AmountExpressionEvaluator.evaluate(amountText) }
@@ -270,14 +272,14 @@ fun AddEditExpenseSheet(
                                     when (opType) {
                                         OperationType.EXPENSE -> {
                                             if (selectedCategory.isIncome) {
-                                                selectedCategory = ExpenseCategory.GROCERIES
+                                                selectedCategory = registry.defaultExpenseCategory
                                             }
                                         }
                                         OperationType.INCOME -> {
                                             isSplitMode = false
                                             expandedCategoryPartKey = null
                                             if (!selectedCategory.isIncome) {
-                                                selectedCategory = ExpenseCategory.INCOME_SALARY
+                                                selectedCategory = registry.defaultIncomeCategory
                                             }
                                         }
                                         OperationType.TRANSFER -> {
@@ -489,7 +491,7 @@ fun AddEditExpenseSheet(
                             if (next && splitParts.size < 2) {
                                 splitParts = listOf(
                                     SplitPartDraft(1, "", selectedCategory, ""),
-                                    SplitPartDraft(2, "", ExpenseCategory.OTHER, "")
+                                    SplitPartDraft(2, "", registry.otherExpenseCategory, "")
                                 )
                                 nextSplitKey = 3
                             }
@@ -586,8 +588,8 @@ fun AddEditExpenseSheet(
                     onValueChange = {
                         merchantText = it
                         if (editingExpense == null && !isTransferMode) {
-                            val guessed = ExpenseCategory.guessFromMerchant(it, isIncomeMode)
-                            if (guessed != ExpenseCategory.OTHER && guessed != ExpenseCategory.INCOME_OTHER) {
+                            val guessed = registry.guessFromMerchant(it, isIncomeMode)
+                            if (guessed.id != registry.otherExpenseCategory.id && guessed.id != registry.otherIncomeCategory.id) {
                                 selectedCategory = guessed
                             }
                         }
@@ -646,8 +648,8 @@ fun AddEditExpenseSheet(
                                     .clickable {
                                         merchantText = sample
                                         if (!isTransferMode) {
-                                            val guessed = ExpenseCategory.guessFromMerchant(sample, isIncomeMode)
-                                            if (guessed != ExpenseCategory.OTHER && guessed != ExpenseCategory.INCOME_OTHER) {
+                                            val guessed = registry.guessFromMerchant(sample, isIncomeMode)
+                                            if (guessed.id != registry.otherExpenseCategory.id && guessed.id != registry.otherIncomeCategory.id) {
                                                 selectedCategory = guessed
                                             }
                                         }
@@ -683,6 +685,7 @@ fun AddEditExpenseSheet(
             if (isExpenseMode && isSplitMode) {
                 SplitReceiptSection(
                     totalAmountRub = parsedAmount,
+                    expenseCategories = registry.expenseCategories,
                     parts = splitParts,
                     parsedPartAmounts = parsedPartAmounts,
                     remaining = splitRemaining,
@@ -703,7 +706,7 @@ fun AddEditExpenseSheet(
                     onAddPart = {
                         val newKey = nextSplitKey
                         nextSplitKey += 1
-                        splitParts = splitParts + SplitPartDraft(newKey, "", ExpenseCategory.OTHER, "")
+                        splitParts = splitParts + SplitPartDraft(newKey, "", registry.otherExpenseCategory, "")
                     },
                     onQuickFillLast = { fillAmount ->
                         if (splitParts.isNotEmpty()) {
@@ -728,7 +731,7 @@ fun AddEditExpenseSheet(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             rowCats.forEach { cat ->
-                                val selected = selectedCategory == cat
+                                val selected = selectedCategory.id == cat.id
                                 val vis = cat.visual()
                                 val tint = if (palette.isDark) vis.darkModeColor else vis.color
 
@@ -781,7 +784,7 @@ fun AddEditExpenseSheet(
                             val amt = parsedPartAmounts.getOrNull(idx) ?: return@mapIndexedNotNull null
                             SplitPartInput(
                                 amountRub = amt,
-                                category = part.category,
+                                categoryId = part.category.id,
                                 note = part.note.trim()
                             )
                         }
@@ -793,14 +796,14 @@ fun AddEditExpenseSheet(
                             inputs
                         )
                     } else {
-                        val saveCategory = if (isTransferMode) ExpenseCategory.OTHER else selectedCategory
+                        val saveCategory = if (isTransferMode) registry.otherExpenseCategory else selectedCategory
                         val saveMerchant = merchantText.trim().ifBlank {
                             if (isTransferMode) "Перевод между своими" else saveCategory.displayName
                         }
                         onSave(
                             parsedAmount,
                             saveMerchant,
-                            saveCategory,
+                            saveCategory.id,
                             selectedAuthor,
                             noteText.trim(),
                             selectedOperationType.name
@@ -842,6 +845,7 @@ fun AddEditExpenseSheet(
 @Composable
 private fun SplitReceiptSection(
     totalAmountRub: Double,
+    expenseCategories: List<CategoryDescriptor>,
     parts: List<SplitPartDraft>,
     parsedPartAmounts: List<Double?>,
     remaining: Double,
@@ -1019,13 +1023,13 @@ private fun SplitReceiptSection(
 
                     if (isPickerOpen) {
                         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            ExpenseCategory.expenseCategories.chunked(4).forEach { rowCats ->
+                            expenseCategories.chunked(4).forEach { rowCats ->
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     rowCats.forEach { cat ->
-                                        val selected = part.category == cat
+                                        val selected = part.category.id == cat.id
                                         val vis = cat.visual()
                                         val tint = if (palette.isDark) vis.darkModeColor else vis.color
                                         Surface(

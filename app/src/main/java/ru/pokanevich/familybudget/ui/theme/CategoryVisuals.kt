@@ -39,113 +39,108 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ru.pokanevich.familybudget.data.ExpenseCategory
+import ru.pokanevich.familybudget.data.CategoryDescriptor
 
 data class CategoryVisual(
-    val icon: ImageVector,
+    val icon: ImageVector?,
+    val emoji: String,
     val color: Color,
     val darkModeColor: Color
 )
 
-fun ExpenseCategory.visual(): CategoryVisual = when (this) {
-    // 14 категорий РАСХОДОВ с цветами и иконками 1-в-1 как на скриншотах
-    ExpenseCategory.GROCERIES -> CategoryVisual(
-        icon = Icons.Rounded.ShoppingBasket,
-        color = Color(0xFF3A7DF0),
-        darkModeColor = Color(0xFF60A5FA)
-    )
-    ExpenseCategory.CAFES -> CategoryVisual(
-        icon = Icons.Rounded.LocalCafe,
-        color = Color(0xFF9368CE),
-        darkModeColor = Color(0xFFB794F4)
-    )
-    ExpenseCategory.LEISURE -> CategoryVisual(
-        icon = Icons.Rounded.AccountBalanceWallet,
-        color = Color(0xFF2FA393),
-        darkModeColor = Color(0xFF4FD1C5)
-    )
-    ExpenseCategory.TRANSPORT -> CategoryVisual(
-        icon = Icons.Rounded.DirectionsBus,
-        color = Color(0xFF2C62DF),
-        darkModeColor = Color(0xFF638EFF)
-    )
-    ExpenseCategory.WORK_FOOD -> CategoryVisual(
-        icon = Icons.Rounded.Restaurant,
-        color = Color(0xFF569E39),
-        darkModeColor = Color(0xFF7AD659)
-    )
-    ExpenseCategory.HEALTH -> CategoryVisual(
-        icon = Icons.Rounded.MonitorHeart,
-        color = Color(0xFF39B530),
-        darkModeColor = Color(0xFF85F473)
-    )
-    ExpenseCategory.SHOPPING -> CategoryVisual(
-        icon = Icons.Rounded.ShoppingCart,
-        color = Color(0xFFB85605),
-        darkModeColor = Color(0xFFED8936)
-    )
-    ExpenseCategory.GIFTS -> CategoryVisual(
-        icon = Icons.Rounded.CardGiftcard,
-        color = Color(0xFFE53935),
-        darkModeColor = Color(0xFFF87171)
-    )
-    ExpenseCategory.UTILITIES -> CategoryVisual(
-        icon = Icons.Rounded.Home,
-        color = Color(0xFF1E4F99),
-        darkModeColor = Color(0xFF5A94EA)
-    )
-    ExpenseCategory.CREDIT -> CategoryVisual(
-        icon = Icons.Rounded.Payments,
-        color = Color(0xFF1A9AB8),
-        darkModeColor = Color(0xFF38BDF8)
-    )
-    ExpenseCategory.PETS -> CategoryVisual(
-        icon = Icons.Rounded.Pets,
-        color = Color(0xFFD61980),
-        darkModeColor = Color(0xFFF472B6)
-    )
-    ExpenseCategory.MOTO -> CategoryVisual(
-        icon = Icons.Rounded.TwoWheeler,
-        color = Color(0xFF9EA800),
-        darkModeColor = Color(0xFFD4E100)
-    )
-    ExpenseCategory.BABY -> CategoryVisual(
-        icon = Icons.Rounded.ChildFriendly,
-        color = Color(0xFF1EB5A6),
-        darkModeColor = Color(0xFF75E4D6)
-    )
-    ExpenseCategory.OTHER -> CategoryVisual(
-        icon = Icons.Rounded.HelpOutline,
-        color = Color(0xFF64748B),
-        darkModeColor = Color(0xFF94A3B8)
-    )
+private data class BuiltInVisualSpec(
+    val icon: ImageVector,
+    val lightHex: Long,
+    val darkHex: Long
+)
 
+private val builtInVisualSpecs: Map<String, BuiltInVisualSpec> = mapOf(
+    // 14 категорий РАСХОДОВ с цветами и иконками 1-в-1 как на скриншотах
+    "GROCERIES" to BuiltInVisualSpec(Icons.Rounded.ShoppingBasket, 0xFF3A7DF0L, 0xFF60A5FAL),
+    "CAFES" to BuiltInVisualSpec(Icons.Rounded.LocalCafe, 0xFF9368CEL, 0xFFB794F4L),
+    "LEISURE" to BuiltInVisualSpec(Icons.Rounded.AccountBalanceWallet, 0xFF2FA393L, 0xFF4FD1C5L),
+    "TRANSPORT" to BuiltInVisualSpec(Icons.Rounded.DirectionsBus, 0xFF2C62DFL, 0xFF638EFFL),
+    "WORK_FOOD" to BuiltInVisualSpec(Icons.Rounded.Restaurant, 0xFF569E39L, 0xFF7AD659L),
+    "HEALTH" to BuiltInVisualSpec(Icons.Rounded.MonitorHeart, 0xFF39B530L, 0xFF85F473L),
+    "SHOPPING" to BuiltInVisualSpec(Icons.Rounded.ShoppingCart, 0xFFB85605L, 0xFFED8936L),
+    "GIFTS" to BuiltInVisualSpec(Icons.Rounded.CardGiftcard, 0xFFE53935L, 0xFFF87171L),
+    "UTILITIES" to BuiltInVisualSpec(Icons.Rounded.Home, 0xFF1E4F99L, 0xFF5A94EAL),
+    "CREDIT" to BuiltInVisualSpec(Icons.Rounded.Payments, 0xFF1A9AB8L, 0xFF38BDF8L),
+    "PETS" to BuiltInVisualSpec(Icons.Rounded.Pets, 0xFFD61980L, 0xFFF472B6L),
+    "MOTO" to BuiltInVisualSpec(Icons.Rounded.TwoWheeler, 0xFF9EA800L, 0xFFD4E100L),
+    "BABY" to BuiltInVisualSpec(Icons.Rounded.ChildFriendly, 0xFF1EB5A6L, 0xFF75E4D6L),
+    "OTHER" to BuiltInVisualSpec(Icons.Rounded.HelpOutline, 0xFF64748BL, 0xFF94A3B8L),
     // 4 категории ДОХОДОВ
-    ExpenseCategory.INCOME_SALARY -> CategoryVisual(
-        icon = Icons.Rounded.Payments,
-        color = Color(0xFF2C62DF),
-        darkModeColor = Color(0xFF60A5FA)
+    "INCOME_SALARY" to BuiltInVisualSpec(Icons.Rounded.Payments, 0xFF2C62DFL, 0xFF60A5FAL),
+    "INCOME_GIFT" to BuiltInVisualSpec(Icons.Rounded.CardGiftcard, 0xFFD62877L, 0xFFF472B6L),
+    "INCOME_INTEREST" to BuiltInVisualSpec(Icons.Rounded.AccountBalance, 0xFF569E39L, 0xFF7AD659L),
+    "INCOME_OTHER" to BuiltInVisualSpec(Icons.Rounded.Savings, 0xFF059669L, 0xFF34D399L)
+)
+
+private fun normalizeOpaqueHex(colorHex: Long): Long =
+    if ((colorHex ushr 24) == 0L) colorHex or 0xFF000000L else colorHex
+
+private fun lightenForDarkMode(base: Color): Color {
+    val luma = 0.299f * base.red + 0.587f * base.green + 0.114f * base.blue
+    if (luma >= 0.55f) return base
+    return Color(
+        red = base.red + (1f - base.red) * 0.28f,
+        green = base.green + (1f - base.green) * 0.28f,
+        blue = base.blue + (1f - base.blue) * 0.28f,
+        alpha = base.alpha
     )
-    ExpenseCategory.INCOME_GIFT -> CategoryVisual(
-        icon = Icons.Rounded.CardGiftcard,
-        color = Color(0xFFD62877),
-        darkModeColor = Color(0xFFF472B6)
-    )
-    ExpenseCategory.INCOME_INTEREST -> CategoryVisual(
-        icon = Icons.Rounded.AccountBalance,
-        color = Color(0xFF569E39),
-        darkModeColor = Color(0xFF7AD659)
-    )
-    ExpenseCategory.INCOME_OTHER -> CategoryVisual(
-        icon = Icons.Rounded.Savings,
-        color = Color(0xFF059669),
-        darkModeColor = Color(0xFF34D399)
+}
+
+fun CategoryDescriptor.visual(): CategoryVisual {
+    val safeHex = normalizeOpaqueHex(colorHex)
+    val baseColor = Color(safeHex)
+    val builtIn = if (isBuiltIn) builtInVisualSpecs[id] else null
+    if (builtIn != null) {
+        val darkColor = if (safeHex == builtIn.lightHex) {
+            Color(builtIn.darkHex)
+        } else {
+            lightenForDarkMode(baseColor)
+        }
+        return CategoryVisual(
+            icon = builtIn.icon,
+            emoji = emoji,
+            color = baseColor,
+            darkModeColor = darkColor
+        )
+    }
+    return CategoryVisual(
+        icon = null,
+        emoji = emoji.ifBlank { "❓" },
+        color = baseColor,
+        darkModeColor = lightenForDarkMode(baseColor)
     )
 }
 
 @Composable
+fun CategorySymbol(
+    visual: CategoryVisual,
+    contentDescription: String?,
+    tint: Color,
+    iconSize: Dp
+) {
+    if (visual.icon != null) {
+        Icon(
+            imageVector = visual.icon,
+            contentDescription = contentDescription,
+            tint = tint,
+            modifier = Modifier.size(iconSize)
+        )
+    } else {
+        Text(
+            text = visual.emoji.ifBlank { "❓" },
+            fontSize = (iconSize.value * 0.9f).sp
+        )
+    }
+}
+
+@Composable
 fun CategoryIconBadge(
-    category: ExpenseCategory,
+    category: CategoryDescriptor,
     modifier: Modifier = Modifier,
     size: Dp = 42.dp,
     iconSize: Dp = 21.dp,
@@ -163,11 +158,11 @@ fun CategoryIconBadge(
             .background(tint.copy(alpha = bgAlpha)),
         contentAlignment = Alignment.Center
     ) {
-        Icon(
-            imageVector = vis.icon,
+        CategorySymbol(
+            visual = vis,
             contentDescription = category.displayName,
             tint = tint,
-            modifier = Modifier.size(iconSize)
+            iconSize = iconSize
         )
     }
 }

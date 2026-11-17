@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
 import ru.pokanevich.familybudget.ui.theme.AuthorPill
 import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
@@ -54,10 +55,14 @@ fun ExpenseDetailSheet(
     onSelectExpense: ((ExpenseEntity) -> Unit)? = null,
     onDismiss: () -> Unit,
     onEdit: (ExpenseEntity) -> Unit,
-    onDelete: (ExpenseEntity) -> Unit
+    onDelete: (ExpenseEntity) -> Unit,
+    registry: CategoryRegistry = CategoryRegistry.DEFAULT
 ) {
     val palette = LocalFamilyPalette.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val resolvedCategory = registry.resolve(expense.categoryName)
+    val isIncome = expense.isIncome(registry)
+    val isTransfer = expense.isTransfer(registry)
     val splitSiblings = if (expense.splitGroupId.isNotBlank()) {
         allExpenses.filter {
             !it.isDeleted && it.splitGroupId == expense.splitGroupId && it.id != expense.id
@@ -93,7 +98,7 @@ fun ExpenseDetailSheet(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             CategoryIconBadge(
-                category = expense.category,
+                category = resolvedCategory,
                 size = 58.dp,
                 iconSize = 28.dp,
                 cornerRadius = 18.dp
@@ -111,15 +116,15 @@ fun ExpenseDetailSheet(
                 )
                 val formatted = Formatters.formatRub(expense.amountRub, showKopecksIfAny = true)
                 Text(
-                    text = if (expense.isIncome) "+$formatted" else formatted,
+                    text = if (isIncome) "+$formatted" else formatted,
                     style = MaterialTheme.typography.headlineLarge,
                     color = when {
-                        expense.isIncome -> palette.accentEmerald
-                        expense.isTransfer -> palette.textSecondary
+                        isIncome -> palette.accentEmerald
+                        isTransfer -> palette.textSecondary
                         else -> palette.textPrimary
                     }
                 )
-                if (expense.isTransfer) {
+                if (isTransfer) {
                     Surface(
                         shape = RoundedCornerShape(999.dp),
                         color = palette.surfaceElevated,
@@ -162,15 +167,15 @@ fun ExpenseDetailSheet(
                 ) {
                     DetailInfoRow(
                         label = when {
-                            expense.isIncome -> "Чей доход"
-                            expense.isTransfer -> "Кто перевёл"
+                            isIncome -> "Чей доход"
+                            isTransfer -> "Кто перевёл"
                             else -> "Оплатил(а)"
                         }
                     ) {
                         AuthorPill(authorName = expense.authorName)
                     }
                     HorizontalDivider(thickness = 0.6.dp, color = palette.outlineSubtle)
-                    if (expense.isTransfer) {
+                    if (isTransfer) {
                         DetailInfoRow(label = "Статус") {
                             Text(
                                 text = "Перевод между своими",
@@ -182,7 +187,7 @@ fun ExpenseDetailSheet(
                     } else {
                         DetailInfoRow(label = "Категория") {
                             Text(
-                                text = expense.category.displayName,
+                                text = resolvedCategory.displayName,
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium,
                                 color = palette.textPrimary
@@ -263,6 +268,7 @@ fun ExpenseDetailSheet(
                             if (idx > 0) {
                                 HorizontalDivider(thickness = 0.6.dp, color = palette.outlineSubtle)
                             }
+                            val siblingCategory = registry.resolve(sibling.categoryName)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -279,14 +285,14 @@ fun ExpenseDetailSheet(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 CategoryIconBadge(
-                                    category = sibling.category,
+                                    category = siblingCategory,
                                     size = 30.dp,
                                     iconSize = 16.dp,
                                     cornerRadius = 9.dp
                                 )
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        text = sibling.category.displayName,
+                                        text = siblingCategory.displayName,
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.Medium,
                                         color = palette.textPrimary,

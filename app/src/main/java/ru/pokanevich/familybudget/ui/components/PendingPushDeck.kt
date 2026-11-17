@@ -40,8 +40,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import ru.pokanevich.familybudget.data.ExpenseCategory
+import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
+import ru.pokanevich.familybudget.ui.theme.CategorySymbol
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
 import ru.pokanevich.familybudget.ui.theme.visual
 import ru.pokanevich.familybudget.ui.util.Formatters
@@ -181,12 +182,15 @@ fun BatteryExemptionBanner(
 @Composable
 fun PendingPushCard(
     expense: ExpenseEntity,
-    onConfirm: (ExpenseCategory) -> Unit,
+    onConfirm: (String) -> Unit,
     onDismiss: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    registry: CategoryRegistry = CategoryRegistry.DEFAULT
 ) {
     val palette = LocalFamilyPalette.current
-    var selectedCategory by remember(expense.id) { mutableStateOf(expense.category) }
+    var selectedCategoryId by remember(expense.id) {
+        mutableStateOf(registry.resolve(expense.categoryName).id)
+    }
     val isMirPay = expense.sourceType == "PUSH_MIRPAY"
     val bankBg = if (isMirPay) palette.accentBlueSoft else palette.accentEmeraldSoft
     val bankFg = if (isMirPay) palette.accentBlue else palette.accentEmerald
@@ -252,10 +256,10 @@ fun PendingPushCard(
             LazyRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                items(ExpenseCategory.expenseCategories) { cat ->
+                items(registry.expenseCategories, key = { it.id }) { cat ->
                     val vis = cat.visual()
                     val tint = if (palette.isDark) vis.darkModeColor else vis.color
-                    val selected = selectedCategory == cat
+                    val selected = selectedCategoryId == cat.id
 
                     Surface(
                         shape = RoundedCornerShape(11.dp),
@@ -263,18 +267,18 @@ fun PendingPushCard(
                         border = if (selected) BorderStroke(1.2.dp, tint) else null,
                         modifier = Modifier
                             .clip(RoundedCornerShape(11.dp))
-                            .clickable { selectedCategory = cat }
+                            .clickable { selectedCategoryId = cat.id }
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
-                            Icon(
-                                imageVector = vis.icon,
+                            CategorySymbol(
+                                visual = vis,
                                 contentDescription = null,
                                 tint = if (selected) tint else palette.textSecondary,
-                                modifier = Modifier.size(15.dp)
+                                iconSize = 15.dp
                             )
                             Text(
                                 text = cat.shortName,
@@ -301,7 +305,7 @@ fun PendingPushCard(
                 }
                 Spacer(modifier = Modifier.width(6.dp))
                 Button(
-                    onClick = { onConfirm(selectedCategory) },
+                    onClick = { onConfirm(selectedCategoryId) },
                     shape = RoundedCornerShape(12.dp),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
                     colors = ButtonDefaults.buttonColors(

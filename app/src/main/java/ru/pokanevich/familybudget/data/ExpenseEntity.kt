@@ -39,16 +39,25 @@ data class ExpenseEntity(
     val category: ExpenseCategory
         get() = ExpenseCategory.fromStoredName(categoryName)
 
-    private val defaultOperationType: OperationType
-        get() = if (category.isIncome) OperationType.INCOME else OperationType.EXPENSE
+    fun resolveCategory(registry: CategoryRegistry = CategoryRegistry.DEFAULT): CategoryDescriptor =
+        registry.resolve(categoryName)
+
+    fun defaultOperationType(registry: CategoryRegistry = CategoryRegistry.DEFAULT): OperationType {
+        val resolved = registry.resolve(categoryName)
+        val isCategoryIncome = resolved.isIncome ||
+            (!registry.isKnown(categoryName) && ExpenseCategory.fromStoredName(categoryName).isIncome)
+        return if (isCategoryIncome) OperationType.INCOME else OperationType.EXPENSE
+    }
+
+    fun resolveOperationType(registry: CategoryRegistry = CategoryRegistry.DEFAULT): OperationType {
+        val normalized = operationType.trim().uppercase()
+        if (normalized.isEmpty()) return defaultOperationType(registry)
+        return runCatching { OperationType.valueOf(normalized) }
+            .getOrDefault(defaultOperationType(registry))
+    }
 
     val effectiveOperationType: OperationType
-        get() {
-            val normalized = operationType.trim().uppercase()
-            if (normalized.isEmpty()) return defaultOperationType
-            return runCatching { OperationType.valueOf(normalized) }
-                .getOrDefault(defaultOperationType)
-        }
+        get() = resolveOperationType(CategoryRegistry.DEFAULT)
 
     val isIncome: Boolean
         get() = effectiveOperationType == OperationType.INCOME
@@ -56,7 +65,13 @@ data class ExpenseEntity(
     val isTransfer: Boolean
         get() = effectiveOperationType == OperationType.TRANSFER
 
-    fun toJsonObject(): JSONObject = JSONObject().apply {
+    fun isIncome(registry: CategoryRegistry): Boolean =
+        resolveOperationType(registry) == OperationType.INCOME
+
+    fun isTransfer(registry: CategoryRegistry): Boolean =
+        resolveOperationType(registry) == OperationType.TRANSFER
+
+    fun toJsonObject(registry: CategoryRegistry = CategoryRegistry.DEFAULT): JSONObject = JSONObject().apply {
         put("id", id)
         put("amountRub", amountRub)
         put("merchant", merchant)
@@ -71,8 +86,8 @@ data class ExpenseEntity(
         if (dedupSignature.isNotEmpty()) put("dedupSignature", dedupSignature)
         if (note.isNotEmpty()) put("note", note)
         if (splitGroupId.isNotEmpty()) put("splitGroupId", splitGroupId)
-        val effectiveOp = effectiveOperationType
-        if (effectiveOp != defaultOperationType) {
+        val effectiveOp = resolveOperationType(registry)
+        if (effectiveOp != defaultOperationType(registry)) {
             put("operationType", effectiveOp.name)
         }
     }
