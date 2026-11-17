@@ -87,7 +87,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.launch
 import ru.pokanevich.familybudget.ai.AiBudgetAdvisor
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import ru.pokanevich.familybudget.data.BudgetRepository
+import ru.pokanevich.familybudget.data.CsvExporter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import ru.pokanevich.familybudget.data.ExpenseEntity
 import ru.pokanevich.familybudget.data.MoneyManagerImporter
 import ru.pokanevich.familybudget.data.SyncState
@@ -206,6 +211,37 @@ fun FamilyBudgetApp(
     var prefilledMerchant by remember { mutableStateOf("") }
     var isImportingBackup by remember { mutableStateOf(false) }
     var importStatusMessage by remember { mutableStateOf<String?>(null) }
+    var pendingCsvBytesToExport by remember { mutableStateOf<ByteArray?>(null) }
+
+    val csvExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        val bytes = pendingCsvBytesToExport
+        pendingCsvBytesToExport = null
+        if (uri != null && bytes != null) {
+            scope.launch {
+                val success = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openOutputStream(uri)?.use { stream ->
+                            stream.write(bytes)
+                            stream.flush()
+                        }
+                    }.isSuccess
+                }
+                if (success) {
+                    snackbarHostState.showSnackbar(
+                        message = "CSV успешно сохранён",
+                        duration = SnackbarDuration.Short
+                    )
+                } else {
+                    snackbarHostState.showSnackbar(
+                        message = "Ошибка при сохранении CSV",
+                        duration = SnackbarDuration.Short
+                    )
+                }
+            }
+        }
+    }
 
     var selectedTab by remember { mutableIntStateOf(0) }
 
@@ -652,6 +688,19 @@ fun FamilyBudgetApp(
             pushDebugLog = repository.prefs.pushDebugLog,
             isImportingBackup = isImportingBackup,
             importStatusMessage = importStatusMessage,
+            onExportCsvCurrentPeriod = {
+                val periodExpenses = confirmedExpenses.filter {
+                    it.createdAtEpochMs in periodWindow.startMs..periodWindow.endMs
+                }
+                pendingCsvBytesToExport = CsvExporter.buildCsvBytes(periodExpenses)
+                val fileName = "family_budget_${selectedPeriod.name.lowercase()}.csv"
+                csvExportLauncher.launch(fileName)
+            },
+            onExportCsvAllTime = {
+                pendingCsvBytesToExport = CsvExporter.buildCsvBytes(confirmedExpenses)
+                val fileName = "family_budget_all.csv"
+                csvExportLauncher.launch(fileName)
+            },
             onOpenPushSettings = {
                 context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             },

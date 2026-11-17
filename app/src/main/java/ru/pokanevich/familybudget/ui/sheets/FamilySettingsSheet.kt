@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.BatterySaver
+import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Sync
@@ -78,6 +79,8 @@ fun FamilySettingsSheet(
     pushDebugLog: String,
     isImportingBackup: Boolean,
     importStatusMessage: String?,
+    onExportCsvCurrentPeriod: () -> Unit,
+    onExportCsvAllTime: () -> Unit,
     onOpenPushSettings: () -> Unit,
     onRequestBatteryExemption: () -> Unit,
     onSimulateTestPush: () -> Unit,
@@ -389,8 +392,48 @@ fun FamilySettingsSheet(
                 )
             }
 
-            // Section 5: Import from Money Manager (.mmbackup)
+            // Section 5: Import / Export
             SettingsGroupCard(title = "Перенос данных") {
+                OutlinedButton(
+                    onClick = onExportCsvCurrentPeriod,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, palette.accentEmerald),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.FileDownload,
+                        contentDescription = null,
+                        tint = palette.accentEmerald,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Экспорт в CSV (текущий период)",
+                        color = palette.accentEmerald,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onExportCsvAllTime,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, palette.accentEmerald),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.FileDownload,
+                        contentDescription = null,
+                        tint = palette.accentEmerald,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Экспорт в CSV (вся база)",
+                        color = palette.accentEmerald,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
                 OutlinedButton(
                     enabled = !isImportingBackup,
                     onClick = { backupPickerLauncher.launch(arrayOf("*/*")) },
