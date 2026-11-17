@@ -119,7 +119,7 @@ class AiDatabaseContextBuilderTest {
         assertTrue(snapshot.relevantRecordLines.size <= 50)
         // Убеждаемся, что сырые 4200 строк не утекли в текст промпта
         val prompt = snapshot.toPromptText()
-        assertFalse(prompt.contains("Магазин №3999"))
+        assertFalse(prompt.contains("Магазин №2001"))
         assertFalse(prompt.contains("MIR-1122"))
     }
 

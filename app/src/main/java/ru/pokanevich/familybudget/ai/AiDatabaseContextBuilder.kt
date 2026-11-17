@@ -614,8 +614,9 @@ object AiDatabaseContextBuilder {
                 months += monthIdx
                 continue
             }
-            shortTokenSynonyms[token]?.let { needles ->
-                synonymNeedles += needles
+            val shortNeedles = shortTokenSynonyms[token]
+            if (shortNeedles != null) {
+                synonymNeedles += shortNeedles
                 if (token !in keywordStems) keywordStems += token
                 continue
             }
