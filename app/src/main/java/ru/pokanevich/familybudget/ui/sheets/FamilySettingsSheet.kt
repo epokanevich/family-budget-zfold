@@ -33,6 +33,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -60,6 +61,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import ru.pokanevich.familybudget.data.BankPushSource
 import ru.pokanevich.familybudget.data.SyncState
 import ru.pokanevich.familybudget.ui.theme.AppThemeMode
 import ru.pokanevich.familybudget.ui.theme.AuthorAvatarCircle
@@ -73,6 +75,7 @@ fun FamilySettingsSheet(
     familySpaceCode: String,
     monthlyBudgetRub: Double,
     autoConfirmPush: Boolean,
+    enabledBankSources: Set<BankPushSource>,
     geminiApiKey: String,
     themeMode: AppThemeMode,
     syncState: SyncState,
@@ -92,7 +95,7 @@ fun FamilySettingsSheet(
     onOpenRecurringPayments: () -> Unit,
     onThemePreview: (AppThemeMode) -> Unit,
     onDismiss: () -> Unit,
-    onSave: (String, String, Double, Boolean, String, AppThemeMode) -> Unit
+    onSave: (String, String, Double, Boolean, Set<BankPushSource>, String, AppThemeMode) -> Unit
 ) {
     val palette = LocalFamilyPalette.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -108,6 +111,7 @@ fun FamilySettingsSheet(
     var code by remember { mutableStateOf(familySpaceCode) }
     var budget by remember { mutableStateOf(monthlyBudgetRub.roundToInt().toString()) }
     var autoConfirm by remember { mutableStateOf(autoConfirmPush) }
+    var selectedBankSources by remember { mutableStateOf(enabledBankSources) }
     var apiKey by remember { mutableStateOf(geminiApiKey) }
     var selectedTheme by remember { mutableStateOf(themeMode) }
     var showApiKey by remember { mutableStateOf(false) }
@@ -287,7 +291,7 @@ fun FamilySettingsSheet(
             }
 
             // Section 3: Bank Push Automation
-            SettingsGroupCard(title = "Пуши СберБанка и Mir Pay") {
+            SettingsGroupCard(title = "Автоучёт пушей и SMS") {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -309,6 +313,61 @@ fun FamilySettingsSheet(
                         )
                     )
                 }
+
+                HorizontalDivider(thickness = 0.6.dp, color = palette.outlineSubtle)
+
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "Банки для перехвата",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = palette.textPrimary
+                    )
+                    Text(
+                        text = "Настройка только для этого телефона",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textSecondary
+                    )
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    BankPushSource.entries.forEach { source ->
+                        val checked = source in selectedBankSources
+                        val toggleSource = { enabled: Boolean ->
+                            selectedBankSources = if (enabled) {
+                                selectedBankSources + source
+                            } else {
+                                selectedBankSources - source
+                            }
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { toggleSource(!checked) }
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = source.title,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = palette.textPrimary,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Switch(
+                                checked = checked,
+                                onCheckedChange = toggleSource,
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = palette.accentEmerald
+                                )
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(thickness = 0.6.dp, color = palette.outlineSubtle)
 
                 OutlinedButton(
                     onClick = onOpenPushSettings,
@@ -529,6 +588,7 @@ fun FamilySettingsSheet(
                         code.trim().ifBlank { "POKANE-FAMILY" },
                         parsedBudget,
                         autoConfirm,
+                        selectedBankSources,
                         apiKey.trim(),
                         selectedTheme
                     )

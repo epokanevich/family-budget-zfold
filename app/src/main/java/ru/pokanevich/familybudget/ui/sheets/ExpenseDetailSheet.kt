@@ -82,6 +82,10 @@ fun ExpenseDetailSheet(
     val sourceLabel = when (expense.sourceType) {
         "PUSH_SBER" -> "Автоперехват СберБанк"
         "PUSH_MIRPAY" -> "Автоперехват Mir Pay"
+        "PUSH_TBANK" -> "Автоперехват Т-Банк"
+        "PUSH_ALFA" -> "Автоперехват Альфа-Банк"
+        "PUSH_VTB" -> "Автоперехват ВТБ"
+        "PUSH_OZON" -> "Автоперехват Ozon Банк"
         "QR_RECEIPT" -> "QR-код чека ФНС"
         RecurringPaymentScheduler.SOURCE_TYPE_RECURRING -> "Регулярный платёж"
         "IMPORT_MM" -> "Перенесено из Money Manager"

@@ -504,6 +504,10 @@ private fun ExpenseTransactionRow(
     val sourceTag = when (expense.sourceType) {
         "PUSH_SBER" -> "Сбер"
         "PUSH_MIRPAY" -> "Mir Pay"
+        "PUSH_TBANK" -> "Т-Банк"
+        "PUSH_ALFA" -> "Альфа"
+        "PUSH_VTB" -> "ВТБ"
+        "PUSH_OZON" -> "Ozon"
         "QR_RECEIPT" -> "Чек ФНС"
         RecurringPaymentScheduler.SOURCE_TYPE_RECURRING -> "Подписка"
         else -> null

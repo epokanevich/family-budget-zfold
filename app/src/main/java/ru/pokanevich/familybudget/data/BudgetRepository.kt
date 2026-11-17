@@ -1198,7 +1198,7 @@ class BudgetRepository private constructor(context: Context) {
     }
 
     /**
-     * Вызывается из BankPushListenerService при получении пуша от СберБанка или Mir Pay.
+     * Вызывается из BankPushListenerService при получении пуша/SMS от включённых банков или Mir Pay.
      * Защита от дублей на одном устройстве (окно [SAME_DEVICE_DEDUP_WINDOW_MS]) учитывает sourceType,
      * нормализованный мерчант и текст пуша — см. [findSameDeviceDuplicate].
      */
@@ -1206,7 +1206,8 @@ class BudgetRepository private constructor(context: Context) {
         amountRub: Double,
         merchant: String,
         sourceType: String,
-        rawText: String
+        rawText: String,
+        suggestedOperationType: String = OperationType.EXPENSE.name
     ) {
         val inserted = ingestMutex.withLock {
             val now = System.currentTimeMillis()
@@ -1221,8 +1222,24 @@ class BudgetRepository private constructor(context: Context) {
                 return@withLock false
             }
 
+            val normalizedOpType = runCatching {
+                OperationType.valueOf(suggestedOperationType.trim().uppercase())
+            }.getOrDefault(OperationType.EXPENSE)
+
             val registrySnapshot = synchronized(configLock) { _categoryRegistry.value }
-            val guessedCategory = registrySnapshot.guessFromMerchant(merchant, isIncome = false)
+            val guessedCategory = if (normalizedOpType == OperationType.TRANSFER) {
+                registrySnapshot.otherExpenseCategory
+            } else {
+                registrySnapshot.guessFromMerchant(
+                    merchant,
+                    isIncome = normalizedOpType == OperationType.INCOME
+                )
+            }
+            val storedOperationType = if (normalizedOpType == OperationType.EXPENSE) {
+                ""
+            } else {
+                normalizedOpType.name
+            }
             val expense = ExpenseEntity(
                 amountRub = amountRub,
                 merchant = merchant.ifBlank { "Покупка по карте" },
@@ -1233,7 +1250,8 @@ class BudgetRepository private constructor(context: Context) {
                 createdAtEpochMs = now,
                 updatedAtEpochMs = now,
                 rawPushOrQrText = rawText,
-                dedupSignature = signature
+                dedupSignature = signature,
+                operationType = storedOperationType
             )
             dao.upsert(expense)
             true
@@ -1283,7 +1301,7 @@ class BudgetRepository private constructor(context: Context) {
             "AMT_" + String.format(java.util.Locale.US, "%.2f", amountRub)
 
         private fun isBankPushSource(sourceType: String): Boolean =
-            sourceType == "PUSH_MIRPAY" || sourceType == "PUSH_SBER"
+            sourceType.startsWith("PUSH_")
 
         private fun normalizePushText(text: String): String =
             text.lowercase().replace('\u00A0', ' ').replace(Regex("\\s+"), " ").trim()
@@ -1298,7 +1316,7 @@ class BudgetRepository private constructor(context: Context) {
         /**
          * Ищет среди кандидатов (та же сумма, недавнее время) дубль нового пуша на этом устройстве.
          *
-         * - Разные sourceType (Сбер + Mir Pay об одной покупке): дубль, если мерчанты совместимы
+         * - Разные sourceType (Mir Pay + банковский PUSH_* об одной покупке): дубль, если мерчанты совместимы
          *   (нормализация с транслитом или шаблонный мерчант).
          * - Одинаковый sourceType:
          *   - идентичный текст с балансом/остатком — это повторная доставка того же пуша → дубль;
@@ -1315,7 +1333,9 @@ class BudgetRepository private constructor(context: Context) {
         ): ExpenseEntity? = candidates.firstOrNull { existing ->
             if (existing.isDeleted) return@firstOrNull false
             if (existing.sourceType != sourceType) {
-                return@firstOrNull isBankPushSource(existing.sourceType) &&
+                val hasMirPayPair = existing.sourceType == "PUSH_MIRPAY" || sourceType == "PUSH_MIRPAY"
+                return@firstOrNull hasMirPayPair &&
+                    isBankPushSource(existing.sourceType) &&
                     isBankPushSource(sourceType) &&
                     MerchantMatcher.areCompatible(existing.merchant, merchant)
             }
@@ -1401,11 +1421,11 @@ class BudgetRepository private constructor(context: Context) {
         }
 
         /**
-         * Кросс-девайс дедупликация: если на одном телефоне сработал Mir Pay (PUSH_MIRPAY),
-         * а на другом по той же привязанной карте пришёл пуш Сбера (PUSH_SBER) в пределах 90 сек
-         * на ту же сумму и у совместимого мерчанта (Пятёрочка / PYATEROCHKA, либо один из них шаблонный),
-         * оставляем одну запись (приоритет: подтверждённая, затем PUSH_MIRPAY),
-         * а вторую мягко удаляем (isDeleted = true).
+         * Кросс-девайс дедупликация: если на одном телефоне сработал Mir Pay (`PUSH_MIRPAY`),
+         * а на другом по привязанной карте пришёл пуш любого банка (`PUSH_SBER`, `PUSH_TBANK`, `PUSH_ALFA`,
+         * `PUSH_VTB`, `PUSH_OZON` и др. `PUSH_*`) в пределах 90 сек на ту же сумму и у совместимого
+         * мерчанта (Пятёрочка / PYATEROCHKA, либо один из них шаблонный), оставляем одну запись
+         * (приоритет: подтверждённая, затем `PUSH_MIRPAY`), а вторую мягко удаляем (`isDeleted = true`).
          *
          * Losers возвращаются с isSynced = false: в isSynced = true они переводятся только
          * после успешного PUT, иначе при сбое удаление никогда не дошло бы до облака.
@@ -1436,6 +1456,8 @@ class BudgetRepository private constructor(context: Context) {
                             break
                         }
                         if (first.sourceType == second.sourceType) continue
+                        val hasMirPayPair = first.sourceType == "PUSH_MIRPAY" || second.sourceType == "PUSH_MIRPAY"
+                        if (!hasMirPayPair) continue
                         if (!MerchantMatcher.areCompatible(first.merchant, second.merchant)) continue
 
                         val firstWins = when {

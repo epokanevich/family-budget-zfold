@@ -89,6 +89,7 @@ import kotlinx.coroutines.launch
 import ru.pokanevich.familybudget.ai.AiBudgetAdvisor
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import ru.pokanevich.familybudget.data.BankPushSource
 import ru.pokanevich.familybudget.data.BudgetRepository
 import ru.pokanevich.familybudget.data.CsvExporter
 import ru.pokanevich.familybudget.data.FamilyPreferences
@@ -201,6 +202,7 @@ fun FamilyBudgetApp(
     var familySpaceCode by remember { mutableStateOf(repository.prefs.familySpaceCode) }
     val monthlyBudgetRub = familyConfig.monthlyBudgetRub
     var autoConfirmPush by remember { mutableStateOf(repository.prefs.autoConfirmBankPush) }
+    var enabledBankSources by remember { mutableStateOf(repository.prefs.enabledBankPushSources) }
     var geminiApiKey by remember { mutableStateOf(repository.prefs.geminiApiKey) }
 
     // Period & Date navigation state
@@ -766,6 +768,7 @@ fun FamilyBudgetApp(
             familySpaceCode = familySpaceCode,
             monthlyBudgetRub = monthlyBudgetRub,
             autoConfirmPush = autoConfirmPush,
+            enabledBankSources = enabledBankSources,
             geminiApiKey = geminiApiKey,
             themeMode = themeMode,
             syncState = syncState,
@@ -795,7 +798,8 @@ fun FamilyBudgetApp(
                 val sample = BankPushParser.parseNotification(
                     packageName = "ru.sberbankmobile",
                     title = "СберБанк Онлайн",
-                    text = "Покупка 1 650 ₽ Пятёрочка Баланс: 48 900 ₽"
+                    text = "Покупка 1 650 ₽ Пятёрочка Баланс: 48 900 ₽",
+                    enabledSources = setOf(BankPushSource.SBER)
                 )
                 if (sample != null) {
                     scope.launch {
@@ -803,7 +807,8 @@ fun FamilyBudgetApp(
                             amountRub = sample.amountRub,
                             merchant = sample.merchant,
                             sourceType = sample.sourceType,
-                            rawText = sample.rawText
+                            rawText = sample.rawText,
+                            suggestedOperationType = sample.suggestedOperationType
                         )
                     }
                 }
@@ -836,19 +841,21 @@ fun FamilyBudgetApp(
             onOpenRecurringPayments = { showRecurringPaymentsSheet = true },
             onThemePreview = onThemeModeChange,
             onDismiss = { showSettingsSheet = false },
-            onSave = { newName, newCode, newBudget, newAutoConfirm, newApiKey, newTheme ->
+            onSave = { newName, newCode, newBudget, newAutoConfirm, newBankSources, newApiKey, newTheme ->
                 val previousCode = FamilyPreferences.normalizeFamilyCode(familySpaceCode)
                 repository.prefs.currentUserName = newName
                 repository.prefs.familySpaceCode = newCode
                 val savedCode = repository.prefs.familySpaceCode
                 val codeChanged = FamilyPreferences.normalizeFamilyCode(savedCode) != previousCode
                 repository.prefs.autoConfirmBankPush = newAutoConfirm
+                repository.prefs.enabledBankPushSources = newBankSources
                 repository.prefs.geminiApiKey = newApiKey
                 repository.prefs.themeMode = newTheme.prefKey
 
                 currentUserName = newName
                 familySpaceCode = savedCode
                 autoConfirmPush = newAutoConfirm
+                enabledBankSources = repository.prefs.enabledBankPushSources
                 geminiApiKey = repository.prefs.geminiApiKey
                 onThemeModeChange(newTheme)
 

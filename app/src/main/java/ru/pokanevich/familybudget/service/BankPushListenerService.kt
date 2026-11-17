@@ -89,10 +89,11 @@ class BankPushListenerService : NotificationListenerService() {
         val notification = sbn.notification ?: return
         val extras = notification.extras ?: return
 
-        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
-        if (!BankPushParser.isPackageEligible(packageName, title)) return
-
         val prefs = FamilyPreferences(applicationContext)
+        val enabledSources = prefs.enabledBankPushSources
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
+        if (!BankPushParser.isPackageEligible(packageName, title, enabledSources)) return
+
         val dedupKey = "${sbn.key ?: "$packageName:${sbn.id}"}|${sbn.postTime}"
         if (!markNotificationProcessedIfNew(prefs, dedupKey)) return
 
@@ -114,7 +115,8 @@ class BankPushListenerService : NotificationListenerService() {
         val parsed = BankPushParser.parseNotification(
             packageName = packageName,
             title = title,
-            text = combinedBody
+            text = combinedBody,
+            enabledSources = enabledSources
         )
 
         if (parsed == null) {
@@ -130,7 +132,8 @@ class BankPushListenerService : NotificationListenerService() {
                 amountRub = parsed.amountRub,
                 merchant = parsed.merchant,
                 sourceType = parsed.sourceType,
-                rawText = parsed.rawText
+                rawText = parsed.rawText,
+                suggestedOperationType = parsed.suggestedOperationType
             )
         }
     }

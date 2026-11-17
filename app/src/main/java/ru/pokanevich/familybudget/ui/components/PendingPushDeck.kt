@@ -88,12 +88,12 @@ fun PushPermissionBanner(
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 Text(
-                    text = "Автоучёт Сбер и Mir Pay",
+                    text = "Автоучёт пушей и SMS",
                     style = MaterialTheme.typography.titleSmall,
                     color = palette.textPrimary
                 )
                 Text(
-                    text = "Включите доступ к пушам. Т-Банк полностью исключён.",
+                    text = "Включите доступ к пушам. Выбор банков — в настройках этого телефона.",
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.textSecondary
                 )
@@ -159,7 +159,7 @@ fun BatteryExemptionBanner(
                     color = palette.textPrimary
                 )
                 Text(
-                    text = "Разрешите работу без ограничений батареи, чтобы Samsung не усыплял перехват Сбера.",
+                    text = "Разрешите работу без ограничений батареи, чтобы Samsung не усыплял перехват банковских пушей.",
                     style = MaterialTheme.typography.bodySmall,
                     color = palette.textSecondary
                 )
@@ -198,17 +198,25 @@ fun PendingPushCard(
     val isTransfer = expense.isTransfer(registry)
     val bankBg = when {
         isRecurring -> palette.accentAmberSoft
-        isMirPay -> palette.accentBlueSoft
+        expense.sourceType == "PUSH_TBANK" -> palette.accentAmberSoft
+        expense.sourceType == "PUSH_ALFA" -> palette.accentCoralSoft
+        isMirPay || expense.sourceType == "PUSH_VTB" || expense.sourceType == "PUSH_OZON" -> palette.accentBlueSoft
         else -> palette.accentEmeraldSoft
     }
     val bankFg = when {
         isRecurring -> palette.accentAmber
-        isMirPay -> palette.accentBlue
+        expense.sourceType == "PUSH_TBANK" -> palette.accentAmber
+        expense.sourceType == "PUSH_ALFA" -> palette.accentCoral
+        isMirPay || expense.sourceType == "PUSH_VTB" || expense.sourceType == "PUSH_OZON" -> palette.accentBlue
         else -> palette.accentEmerald
     }
     val bankLabel = when {
         isRecurring -> "Регулярный"
         isMirPay -> "Mir Pay"
+        expense.sourceType == "PUSH_TBANK" -> "Т-Банк"
+        expense.sourceType == "PUSH_ALFA" -> "Альфа-Банк"
+        expense.sourceType == "PUSH_VTB" -> "ВТБ"
+        expense.sourceType == "PUSH_OZON" -> "Ozon Банк"
         else -> "СберБанк"
     }
     val chipCategories = if (isIncome) registry.incomeCategories else registry.expenseCategories

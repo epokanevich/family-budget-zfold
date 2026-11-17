@@ -7,6 +7,99 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * Локальные источники банковских push- и SMS-уведомлений (настраиваются отдельно на каждом телефоне,
+ * НЕ синхронизируются в общий семейный config_v1.json).
+ */
+enum class BankPushSource(
+    val id: String,
+    val title: String,
+    val packages: Set<String>,
+    val smsSenders: Set<String>,
+    val sourceTypeTag: String
+) {
+    SBER(
+        id = "SBER",
+        title = "СберБанк + 900",
+        packages = setOf(
+            "ru.sberbankmobile",
+            "ru.sberbank.sberbankir",
+            "ru.sberbank.spasibo",
+            "ru.sberbank.sberpay"
+        ),
+        smsSenders = setOf("900", "sberbank", "сбербанк"),
+        sourceTypeTag = "PUSH_SBER"
+    ),
+    MIR_PAY(
+        id = "MIR_PAY",
+        title = "Mir Pay",
+        packages = setOf("ru.nspk.mirpay"),
+        smsSenders = emptySet(),
+        sourceTypeTag = "PUSH_MIRPAY"
+    ),
+    TBANK(
+        id = "TBANK",
+        title = "Т-Банк",
+        packages = setOf(
+            "com.idamob.tinkoff.android",
+            "com.tbank.app",
+            "ru.tbank.mobile",
+            "ru.tbank.android",
+            "ru.tbank.app",
+            "ru.tbank.pay",
+            "ru.tinkoff.android",
+            "com.tinkoff.android"
+        ),
+        smsSenders = setOf("tinkoff", "t-bank", "tbank", "тинькофф", "т-банк"),
+        sourceTypeTag = "PUSH_TBANK"
+    ),
+    ALFA(
+        id = "ALFA",
+        title = "Альфа-Банк",
+        packages = setOf(
+            "ru.alfabank.mobile.android",
+            "ru.alfabank.android",
+            "ru.alfabank.app"
+        ),
+        smsSenders = setOf("alfa-bank", "alfabank", "альфа-банк", "альфабанк", "alfa"),
+        sourceTypeTag = "PUSH_ALFA"
+    ),
+    VTB(
+        id = "VTB",
+        title = "ВТБ",
+        packages = setOf(
+            "ru.vtb24.mobilebanking.android",
+            "ru.vtb.mobilebank",
+            "ru.vtb.android",
+            "ru.vtb.app"
+        ),
+        smsSenders = setOf("vtb", "втб", "vtb24", "втб24", "vtb-online", "vtb online", "втб онлайн"),
+        sourceTypeTag = "PUSH_VTB"
+    ),
+    OZON(
+        id = "OZON",
+        title = "Ozon Банк",
+        packages = setOf(
+            "ru.ozon.fintech.finance"
+        ),
+        smsSenders = setOf("ozonbank", "ozon bank", "ozon банк", "озон банк", "ozon-bank", "ozoncard"),
+        sourceTypeTag = "PUSH_OZON"
+    );
+
+    companion object {
+        val DEFAULT_ENABLED: Set<BankPushSource> = setOf(SBER, MIR_PAY)
+        val DEFAULT_ENABLED_IDS: Set<String> = setOf("SBER", "MIR_PAY")
+
+        fun fromId(rawId: String): BankPushSource? {
+            val normalized = rawId.trim().uppercase()
+            return entries.firstOrNull { it.id == normalized }
+        }
+
+        fun fromSourceTypeTag(sourceType: String): BankPushSource? =
+            entries.firstOrNull { it.sourceTypeTag == sourceType }
+    }
+}
+
 class FamilyPreferences(context: Context) {
     private val prefs: SharedPreferences =
         context.applicationContext.getSharedPreferences("family_budget_prefs", Context.MODE_PRIVATE)
@@ -30,6 +123,31 @@ class FamilyPreferences(context: Context) {
     var autoConfirmBankPush: Boolean
         get() = runCatching { prefs.getBoolean("auto_confirm_push", false) }.getOrDefault(false)
         set(value) = prefs.edit().putBoolean("auto_confirm_push", value).apply()
+
+    /**
+     * Локальное множество включённых ID банков для перехвата пушей/SMS (только для этого телефона).
+     * По умолчанию включены только SBER и MIR_PAY (Т-Банк и остальные банки выключены).
+     */
+    var enabledBankPushSourceIds: Set<String>
+        get() {
+            if (!prefs.contains(KEY_ENABLED_BANK_PUSH_SOURCES)) {
+                return BankPushSource.DEFAULT_ENABLED_IDS
+            }
+            val raw = runCatching {
+                prefs.getStringSet(KEY_ENABLED_BANK_PUSH_SOURCES, null)
+            }.getOrNull() ?: return BankPushSource.DEFAULT_ENABLED_IDS
+            return raw.mapNotNull { BankPushSource.fromId(it)?.id }.toSet()
+        }
+        set(value) {
+            val sanitized = value.mapNotNull { BankPushSource.fromId(it)?.id }.toHashSet()
+            prefs.edit().putStringSet(KEY_ENABLED_BANK_PUSH_SOURCES, sanitized).apply()
+        }
+
+    var enabledBankPushSources: Set<BankPushSource>
+        get() = enabledBankPushSourceIds.mapNotNull { BankPushSource.fromId(it) }.toSet()
+        set(value) {
+            enabledBankPushSourceIds = value.map { it.id }.toSet()
+        }
 
     /**
      * Ключ Gemini. Пустое значение в "gemini_api_key" по-прежнему означает «использовать ключ из сборки».
@@ -155,6 +273,7 @@ class FamilyPreferences(context: Context) {
         const val MAX_PERSISTED_PUSH_DEDUP_KEYS = 50
         private const val KEY_GEMINI_CLEARED = "gemini_api_key_cleared"
         private const val KEY_RECENT_PUSH_DEDUP_KEYS = "recent_push_dedup_keys"
+        private const val KEY_ENABLED_BANK_PUSH_SOURCES = "enabled_bank_push_sources"
         private const val KEY_FAMILY_CONFIG_JSON = "family_config_v1_json"
         private const val KEY_HAS_UNSYNCED_CONFIG = "has_unsynced_config"
         private const val KEY_SYNCED_CONFIG_FAMILIES = "synced_config_families"

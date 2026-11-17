@@ -2,6 +2,8 @@ package ru.pokanevich.familybudget
 
 import org.junit.Assert.*
 import org.junit.Test
+import ru.pokanevich.familybudget.data.BankPushSource
+import ru.pokanevich.familybudget.data.OperationType
 import ru.pokanevich.familybudget.service.BankPushParser
 
 class BankPushParserTest {
@@ -329,5 +331,337 @@ class BankPushParserTest {
         assertNotNull(p3)
         assertEquals(600.0, p3!!.amountRub, 0.001)
         assertEquals("Бензин", p3.merchant)
+    }
+
+    @Test
+    fun defaultEnabledSources_onlySberAndMirPay() {
+        assertEquals(setOf(BankPushSource.SBER, BankPushSource.MIR_PAY), BankPushSource.DEFAULT_ENABLED)
+        assertEquals(setOf("SBER", "MIR_PAY"), BankPushSource.DEFAULT_ENABLED_IDS)
+
+        // With empty enabledSources even Sber and Mir Pay are ignored
+        assertFalse(BankPushParser.isPackageEligible("ru.sberbankmobile", "СберБанк", emptySet()))
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "ru.sberbankmobile",
+                title = "СберБанк",
+                text = "Покупка 500 ₽ Кофе",
+                enabledSources = emptySet()
+            )
+        )
+    }
+
+    @Test
+    fun parseNotification_tbankEnabled_parsesTemplatesAndRejectsOtpIncomes() {
+        val enabled = setOf(BankPushSource.TBANK)
+
+        assertTrue(BankPushParser.isPackageEligible("com.idamob.tinkoff.android", "Т-Банк", enabled))
+        assertTrue(BankPushParser.isPackageEligible("com.samsung.android.messaging", "T-Bank", enabled))
+
+        val classic = BankPushParser.parseNotification(
+            packageName = "com.idamob.tinkoff.android",
+            title = "Т-Банк",
+            text = "Покупка, карта *2997. 3210.84 RUB. OOO DELOVY. Доступно 45200.50 RUB",
+            enabledSources = enabled
+        )
+        assertNotNull(classic)
+        assertEquals(3210.84, classic!!.amountRub, 0.001)
+        assertEquals("OOO DELOVY", classic.merchant)
+        assertEquals("PUSH_TBANK", classic.sourceType)
+        assertEquals(OperationType.EXPENSE.name, classic.suggestedOperationType)
+
+        val modern = BankPushParser.parseNotification(
+            packageName = "ru.tbank.mobile",
+            title = "Пятёрочка",
+            text = "−540 ₽ • Black *1234",
+            enabledSources = enabled
+        )
+        assertNotNull(modern)
+        assertEquals(540.0, modern!!.amountRub, 0.001)
+        assertEquals("Пятёрочка", modern.merchant)
+        assertEquals("PUSH_TBANK", modern.sourceType)
+
+        val sms = BankPushParser.parseNotification(
+            packageName = "com.samsung.android.messaging",
+            title = "Tinkoff",
+            text = "Покупка, карта *1234. 780 ₽. ВкусВилл. Доступно 12 000 ₽",
+            enabledSources = enabled
+        )
+        assertNotNull(sms)
+        assertEquals(780.0, sms!!.amountRub, 0.001)
+        assertEquals("ВкусВилл", sms.merchant)
+        assertEquals("PUSH_TBANK", sms.sourceType)
+
+        // OTP, incomes, refunds, declines, balance-only must be ignored
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "com.idamob.tinkoff.android",
+                title = "Т-Банк",
+                text = "Подтвердите покупку 2 400 RUB на Ozon. Код: 9152",
+                enabledSources = enabled
+            )
+        )
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "com.idamob.tinkoff.android",
+                title = "Т-Банк",
+                text = "Пополнение, карта *2997. 15 000 RUB. Доступно 45 000 RUB",
+                enabledSources = enabled
+            )
+        )
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "com.idamob.tinkoff.android",
+                title = "Т-Банк",
+                text = "Входящий перевод, карта *2997. 5 000 RUB от Иван И. Доступно 50 200.50 RUB",
+                enabledSources = enabled
+            )
+        )
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "com.idamob.tinkoff.android",
+                title = "Т-Банк",
+                text = "Возврат покупки, карта *2997. 1 200 RUB. Доступно 15 000 RUB",
+                enabledSources = enabled
+            )
+        )
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "com.idamob.tinkoff.android",
+                title = "Т-Банк",
+                text = "Доступно 45 200.50 RUB",
+                enabledSources = enabled
+            )
+        )
+    }
+
+    @Test
+    fun parseNotification_alfaEnabled_parsesTemplatesAndRejectsOtpIncomes() {
+        // Blocked by default
+        assertFalse(BankPushParser.isPackageEligible("ru.alfabank.mobile.android", "Альфа-Банк"))
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "ru.alfabank.mobile.android",
+                title = "Альфа-Банк",
+                text = "Покупка. Карта *1234. Сумма: 1 500.00 RUB. Supermarket. Баланс: 45 300.00 RUB."
+            )
+        )
+
+        val enabled = setOf(BankPushSource.ALFA)
+        val push = BankPushParser.parseNotification(
+            packageName = "ru.alfabank.mobile.android",
+            title = "Альфа-Банк",
+            text = "Покупка. Карта *1234. Сумма: 1 500.00 RUB. Supermarket. Баланс: 45 300.00 RUB.",
+            enabledSources = enabled
+        )
+        assertNotNull(push)
+        assertEquals(1500.0, push!!.amountRub, 0.001)
+        assertEquals("Supermarket", push.merchant)
+        assertEquals("PUSH_ALFA", push.sourceType)
+
+        val accountPush = BankPushParser.parseNotification(
+            packageName = "ru.alfabank.mobile.android",
+            title = "Альфа-Банк",
+            text = "Списание 1 200 ₽ со счёта *5678. Перекрёсток. Остаток 30 000 ₽",
+            enabledSources = enabled
+        )
+        assertNotNull(accountPush)
+        assertEquals(1200.0, accountPush!!.amountRub, 0.001)
+        assertEquals("Перекрёсток", accountPush.merchant)
+        assertEquals("PUSH_ALFA", accountPush.sourceType)
+
+        val sms = BankPushParser.parseNotification(
+            packageName = "com.google.android.apps.messaging",
+            title = "Alfa-Bank",
+            text = "Покупка *1234 Сумма: 500.00 RUB Ozon.ru Доступно: 12450.00 RUB",
+            enabledSources = enabled
+        )
+        assertNotNull(sms)
+        assertEquals(500.0, sms!!.amountRub, 0.001)
+        assertEquals("Ozon.ru", sms.merchant)
+        assertEquals("PUSH_ALFA", sms.sourceType)
+
+        // OTP / replenishment / refund ignored
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "com.google.android.apps.messaging",
+                title = "Alfa-Bank",
+                text = "Подтвердите перевод 5000 RUB на карту 1234. Код 4582",
+                enabledSources = enabled
+            )
+        )
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "ru.alfabank.mobile.android",
+                title = "Альфа-Банк",
+                text = "Пополнение счёта +15 000 ₽. Баланс: 35 000 ₽",
+                enabledSources = enabled
+            )
+        )
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "ru.alfabank.mobile.android",
+                title = "Альфа-Банк",
+                text = "Возврат 1 200 ₽ Ozon.ru",
+                enabledSources = enabled
+            )
+        )
+    }
+
+    @Test
+    fun parseNotification_vtbEnabled_parsesTemplatesAndRejectsOtpIncomes() {
+        assertFalse(BankPushParser.isPackageEligible("ru.vtb24.mobilebanking.android", "ВТБ Онлайн"))
+
+        val enabled = setOf(BankPushSource.VTB)
+        val push = BankPushParser.parseNotification(
+            packageName = "ru.vtb24.mobilebanking.android",
+            title = "ВТБ Онлайн",
+            text = "Карта *1234. Покупка. Сумма: 1000.00 RUB. ВкусВилл. Доступно: 24 000.00 RUB.",
+            enabledSources = enabled
+        )
+        assertNotNull(push)
+        assertEquals(1000.0, push!!.amountRub, 0.001)
+        assertEquals("ВкусВилл", push.merchant)
+        assertEquals("PUSH_VTB", push.sourceType)
+
+        val sms = BankPushParser.parseNotification(
+            packageName = "com.samsung.android.messaging",
+            title = "VTB",
+            text = "Оплата 750 ₽ Пятёрочка. Карта *1234. Баланс: 15 000 ₽",
+            enabledSources = enabled
+        )
+        assertNotNull(sms)
+        assertEquals(750.0, sms!!.amountRub, 0.001)
+        assertEquals("Пятёрочка", sms.merchant)
+        assertEquals("PUSH_VTB", sms.sourceType)
+
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "com.samsung.android.messaging",
+                title = "VTB",
+                text = "Код подтверждения операции 839201 на сумму 2 000 ₽. Никому не сообщайте",
+                enabledSources = enabled
+            )
+        )
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "ru.vtb24.mobilebanking.android",
+                title = "ВТБ Онлайн",
+                text = "Зачисление 50 000 ₽. Баланс: 75 000 ₽",
+                enabledSources = enabled
+            )
+        )
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "ru.vtb24.mobilebanking.android",
+                title = "ВТБ Онлайн",
+                text = "Операция на 500 ₽ отклонена",
+                enabledSources = enabled
+            )
+        )
+    }
+
+    @Test
+    fun parseNotification_ozonEnabled_parsesTemplatesAndIgnoresMarketplacePromos() {
+        assertFalse(BankPushParser.isPackageEligible("ru.ozon.fintech.finance", "Ozon Банк"))
+
+        val enabled = setOf(BankPushSource.OZON)
+        val push = BankPushParser.parseNotification(
+            packageName = "ru.ozon.fintech.finance",
+            title = "Ozon Банк",
+            text = "Покупка 1 450,00 ₽ Ozon.ru. Баланс: 5 000,00 ₽",
+            enabledSources = enabled
+        )
+        assertNotNull(push)
+        assertEquals(1450.0, push!!.amountRub, 0.001)
+        assertEquals("Ozon.ru", push.merchant)
+        assertEquals("PUSH_OZON", push.sourceType)
+
+        val sms = BankPushParser.parseNotification(
+            packageName = "com.google.android.apps.messaging",
+            title = "OzonBank",
+            text = "Списание 890 RUB Магнит. Остаток: 4 110 RUB",
+            enabledSources = enabled
+        )
+        assertNotNull(sms)
+        assertEquals(890.0, sms!!.amountRub, 0.001)
+        assertEquals("Магнит", sms.merchant)
+        assertEquals("PUSH_OZON", sms.sourceType)
+
+        // Ozon marketplace promo in ru.ozon.app.android must be ignored, while Ozon Bank title works
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "ru.ozon.app.android",
+                title = "Ozon",
+                text = "Скидка! Товар подешевел до 990 ₽",
+                enabledSources = enabled
+            )
+        )
+        val superAppBank = BankPushParser.parseNotification(
+            packageName = "ru.ozon.app.android",
+            title = "Ozon Банк",
+            text = "Покупка 650 ₽ Дикси. Баланс: 3 000 ₽",
+            enabledSources = enabled
+        )
+        assertNotNull(superAppBank)
+        assertEquals(650.0, superAppBank!!.amountRub, 0.001)
+        assertEquals("Дикси", superAppBank.merchant)
+        assertEquals("PUSH_OZON", superAppBank.sourceType)
+
+        // OTP and replenishment ignored
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "ru.ozon.fintech.finance",
+                title = "Ozon Банк",
+                text = "Одноразовый код 5566 для оплаты 1 200 ₽. Никому не сообщайте",
+                enabledSources = enabled
+            )
+        )
+        assertNull(
+            BankPushParser.parseNotification(
+                packageName = "ru.ozon.fintech.finance",
+                title = "Ozon Банк",
+                text = "Пополнение Ozon Карты на 5 000 ₽. Баланс: 8 000 ₽",
+                enabledSources = enabled
+            )
+        )
+    }
+
+    @Test
+    fun parseNotification_explicitSelfTransfer_setsTransferOperationType() {
+        val sberSelfTransfer = BankPushParser.parseNotification(
+            packageName = "ru.sberbankmobile",
+            title = "СберБанк",
+            text = "Перевод между своими счетами 5 000 ₽. Баланс: 20 000 ₽"
+        )
+        assertNotNull(sberSelfTransfer)
+        assertEquals(5000.0, sberSelfTransfer!!.amountRub, 0.001)
+        assertEquals(OperationType.TRANSFER.name, sberSelfTransfer.suggestedOperationType)
+
+        val vtbSelfTransfer = BankPushParser.parseNotification(
+            packageName = "ru.vtb24.mobilebanking.android",
+            title = "ВТБ Онлайн",
+            text = "Перевод на свой счёт 3 000 ₽. Доступно: 12 000 ₽",
+            enabledSources = setOf(BankPushSource.VTB)
+        )
+        assertNotNull(vtbSelfTransfer)
+        assertEquals(OperationType.TRANSFER.name, vtbSelfTransfer!!.suggestedOperationType)
+
+        val sberToTbankSelf = BankPushParser.parseNotification(
+            packageName = "ru.sberbankmobile",
+            title = "СберБанк",
+            text = "Перевод себе в Т-Банк 2 000 ₽. Баланс: 10 000 ₽",
+            enabledSources = setOf(BankPushSource.SBER, BankPushSource.TBANK)
+        )
+        assertNotNull(sberToTbankSelf)
+        assertEquals(OperationType.TRANSFER.name, sberToTbankSelf!!.suggestedOperationType)
+
+        // Transfer to another person stays EXPENSE
+        val personTransfer = BankPushParser.parseNotification(
+            packageName = "com.google.android.apps.messaging",
+            title = "900",
+            text = "Перевод 1000 ₽ Анжелика П. Баланс: 5000 ₽"
+        )
+        assertNotNull(personTransfer)
+        assertEquals(OperationType.EXPENSE.name, personTransfer!!.suggestedOperationType)
     }
 }

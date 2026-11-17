@@ -24,7 +24,7 @@ data class ExpenseEntity(
     val merchant: String = "",
     val categoryName: String = ExpenseCategory.OTHER.name,
     val authorName: String = "Евгений", // "Евгений" или "Анжелика" (информативно, бюджет общий)
-    val sourceType: String = "MANUAL",  // "MANUAL", "PUSH_SBER", "PUSH_MIRPAY", "QR_RECEIPT"
+    val sourceType: String = "MANUAL",  // "MANUAL", "PUSH_SBER", "PUSH_MIRPAY", "PUSH_TBANK", "PUSH_ALFA", "PUSH_VTB", "PUSH_OZON", "QR_RECEIPT"
     val isPendingConfirmation: Boolean = false, // true = попало во "Входящие из пушей" на проверку в 1 тап
     val isDeleted: Boolean = false,     // Soft-delete для бесконфликтной синхронизации
     val isSynced: Boolean = false,      // Локальный маркер отправки в Firestore

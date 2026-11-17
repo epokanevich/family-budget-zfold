@@ -239,4 +239,68 @@ class CrossDevicePushDedupTest {
         assertNull(plan.pushedVersions["x"])
         assertNotNull(plan.mergedMap["x"])
     }
+
+    @Test
+    fun `mirpay and tbank pushes within 90s keep mirpay and soft-delete tbank`() {
+        val mirPay = push("mirpay-tb", 1250.0, "PUSH_MIRPAY", merchant = "Пятёрочка", author = "Анжелика")
+        val tbank = push("tbank-1", 1250.0, "PUSH_TBANK", merchant = "PYATEROCHKA", offsetMs = 5_000L)
+        val map = mutableMapOf(mirPay.id to mirPay, tbank.id to tbank)
+
+        val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 15_000L)
+
+        assertEquals(listOf("tbank-1"), losers.map { it.id })
+        assertTrue(map.getValue("tbank-1").isDeleted)
+        assertFalse(map.getValue("mirpay-tb").isDeleted)
+    }
+
+    @Test
+    fun `confirmed tbank wins over pending mirpay within 90s`() {
+        val mirPayPending = push("mirpay-tb-p", 890.0, "PUSH_MIRPAY", merchant = "Магнит", pending = true)
+        val tbankConfirmed = push("tbank-2", 890.0, "PUSH_TBANK", merchant = "MAGNIT MM", offsetMs = 4_000L, pending = false)
+        val map = mutableMapOf(mirPayPending.id to mirPayPending, tbankConfirmed.id to tbankConfirmed)
+
+        val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 15_000L)
+
+        assertEquals(listOf("mirpay-tb-p"), losers.map { it.id })
+        assertTrue(map.getValue("mirpay-tb-p").isDeleted)
+        assertFalse(map.getValue("tbank-2").isDeleted)
+    }
+
+    @Test
+    fun `mirpay pairs with alfa vtb and ozon pushes within 90s`() {
+        val mirPayAlfa = push("mp-a", 450.0, "PUSH_MIRPAY", merchant = "ВкусВилл")
+        val alfa = push("alfa-1", 450.0, "PUSH_ALFA", merchant = "VKUSVILL", offsetMs = 3_000L)
+
+        val mirPayVtb = push("mp-v", 650.0, "PUSH_MIRPAY", merchant = "Аптека Вита", offsetMs = 200_000L)
+        val vtb = push("vtb-1", 650.0, "PUSH_VTB", merchant = "APTEKA VITA", offsetMs = 204_000L)
+
+        val mirPayOzon = push("mp-o", 1450.0, "PUSH_MIRPAY", merchant = "Ozon.ru", offsetMs = 400_000L)
+        val ozon = push("ozon-1", 1450.0, "PUSH_OZON", merchant = "OZON", offsetMs = 406_000L)
+
+        val map = mutableMapOf(
+            mirPayAlfa.id to mirPayAlfa, alfa.id to alfa,
+            mirPayVtb.id to mirPayVtb, vtb.id to vtb,
+            mirPayOzon.id to mirPayOzon, ozon.id to ozon
+        )
+
+        val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 450_000L)
+
+        assertEquals(setOf("alfa-1", "vtb-1", "ozon-1"), losers.map { it.id }.toSet())
+        assertFalse(map.getValue("mp-a").isDeleted)
+        assertFalse(map.getValue("mp-v").isDeleted)
+        assertFalse(map.getValue("mp-o").isDeleted)
+    }
+
+    @Test
+    fun `different bank pushes without mirpay are not deduplicated`() {
+        val sber = push("sber-only", 540.0, "PUSH_SBER", merchant = "Пятёрочка")
+        val tbank = push("tbank-only", 540.0, "PUSH_TBANK", merchant = "Пятёрочка", offsetMs = 10_000L)
+        val map = mutableMapOf(sber.id to sber, tbank.id to tbank)
+
+        val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 20_000L)
+
+        assertTrue(losers.isEmpty())
+        assertFalse(map.getValue("sber-only").isDeleted)
+        assertFalse(map.getValue("tbank-only").isDeleted)
+    }
 }
