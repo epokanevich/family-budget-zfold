@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.sp
 import ru.pokanevich.familybudget.data.CategoryDescriptor
 import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
+import ru.pokanevich.familybudget.data.FamilyPreferences
 import ru.pokanevich.familybudget.data.OperationType
 import ru.pokanevich.familybudget.data.SavingsGoalCalculator
 import ru.pokanevich.familybudget.data.SplitExpenseBuilder
@@ -533,51 +534,53 @@ fun AddEditExpenseSheet(
                 }
             }
 
-            // Payer / Author Toggle
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    text = when (selectedOperationType) {
-                        OperationType.INCOME -> "Чей доход"
-                        OperationType.TRANSFER -> "Кто перевёл"
-                        OperationType.EXPENSE -> "Кто оплатил"
-                    },
-                    style = MaterialTheme.typography.labelMedium,
-                    color = palette.textSecondary
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    listOf("Евгений", "Анжелика").forEach { person ->
-                        val selected = selectedAuthor.equals(person, ignoreCase = true)
-                        val isAnzhelika = person == "Анжелика"
-                        val accent = if (isAnzhelika) palette.anzhelikaColor else palette.eugeneColor
-                        val soft = if (isAnzhelika) palette.anzhelikaSoft else palette.eugeneSoft
+            // Payer / Author Toggle (только для парного семейного режима)
+            if (!FamilyPreferences.isSoloProfile) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = when (selectedOperationType) {
+                            OperationType.INCOME -> "Чей доход"
+                            OperationType.TRANSFER -> "Кто перевёл"
+                            OperationType.EXPENSE -> "Кто оплатил"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.textSecondary
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        listOf("Евгений", "Анжелика").forEach { person ->
+                            val selected = selectedAuthor.equals(person, ignoreCase = true)
+                            val isAnzhelika = person == "Анжелика"
+                            val accent = if (isAnzhelika) palette.anzhelikaColor else palette.eugeneColor
+                            val soft = if (isAnzhelika) palette.anzhelikaSoft else palette.eugeneSoft
 
-                        Surface(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { selectedAuthor = person },
-                            shape = RoundedCornerShape(14.dp),
-                            color = if (selected) soft else palette.surfaceElevated,
-                            border = BorderStroke(
-                                width = if (selected) 1.5.dp else 1.dp,
-                                color = if (selected) accent else palette.outlineSubtle
-                            )
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                AuthorAvatarCircle(authorName = person, size = 24.dp)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = person,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = if (selected) accent else palette.textSecondary
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .clickable { selectedAuthor = person },
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (selected) soft else palette.surfaceElevated,
+                                border = BorderStroke(
+                                    width = if (selected) 1.5.dp else 1.dp,
+                                    color = if (selected) accent else palette.outlineSubtle
                                 )
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    AuthorAvatarCircle(authorName = person, size = 24.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = person,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = if (selected) accent else palette.textSecondary
+                                    )
+                                }
                             }
                         }
                     }

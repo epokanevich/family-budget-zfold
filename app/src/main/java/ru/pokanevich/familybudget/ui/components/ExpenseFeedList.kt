@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import ru.pokanevich.familybudget.ai.AiBudgetReport
 import ru.pokanevich.familybudget.data.CategoryDescriptor
 import ru.pokanevich.familybudget.data.CategoryRegistry
+import ru.pokanevich.familybudget.data.FamilyPreferences
 import ru.pokanevich.familybudget.data.ExpenseEntity
 import ru.pokanevich.familybudget.data.RecurringPaymentScheduler
 import ru.pokanevich.familybudget.data.SavingsGoalCalculator
@@ -361,7 +362,12 @@ fun ExpensesFeedPane(
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        items(FeedFilter.entries) { filter ->
+                        val visibleFilters = if (FamilyPreferences.isSoloProfile) {
+                            listOf(FeedFilter.ALL, FeedFilter.EXPENSES, FeedFilter.INCOMES)
+                        } else {
+                            FeedFilter.entries
+                        }
+                        items(visibleFilters) { filter ->
                             val selected = activeFilter == filter && selectedCategoryFilterId == null
                             FilterPillChip(
                                 label = filter.label,

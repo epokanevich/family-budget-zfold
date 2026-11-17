@@ -1,9 +1,20 @@
 name: Build FamilyBudget APK
 
+run-name: Build APK (${{ inputs.default_user_name || 'Eugene' }} / ${{ inputs.default_family_code || 'POKANE-FAMILY' }})
+
 on:
   push:
     branches: [ "main", "master" ]
   workflow_dispatch:
+    inputs:
+      default_family_code:
+        description: 'Default familySpaceCode (empty = POKANE-FAMILY)'
+        required: false
+        default: ''
+      default_user_name:
+        description: 'Default userName (empty = Евгений)'
+        required: false
+        default: ''
 
 # APK больше не публикуется в GitHub Releases (в нём зашиты токены синка/Gemini),
 # поэтому workflow достаточно только чтения содержимого репозитория.
@@ -75,6 +86,8 @@ jobs:
         env:
           SYNC_GITHUB_TOKEN: ${{ secrets.SYNC_GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DEFAULT_FAMILY_SPACE_CODE: ${{ inputs.default_family_code }}
+          DEFAULT_USER_NAME: ${{ inputs.default_user_name }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}

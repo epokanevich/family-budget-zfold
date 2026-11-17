@@ -80,6 +80,7 @@ import ru.pokanevich.familybudget.ai.CategoryDiagnosis
 import ru.pokanevich.familybudget.data.CategoryDescriptor
 import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
+import ru.pokanevich.familybudget.data.FamilyPreferences
 import ru.pokanevich.familybudget.data.MonthlyTrendCalculator
 import ru.pokanevich.familybudget.data.MonthlyTrendPoint
 import ru.pokanevich.familybudget.data.OperationType
@@ -1015,7 +1016,7 @@ private fun CoupleContributionCard(report: AiBudgetReport) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Общий баланс и участие пары",
+                    text = if (FamilyPreferences.isSoloProfile) "Общий баланс за всё время" else "Общий баланс и участие пары",
                     style = MaterialTheme.typography.titleMedium,
                     color = palette.textPrimary
                 )
@@ -1068,49 +1069,51 @@ private fun CoupleContributionCard(report: AiBudgetReport) {
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                MemberStatBox(
-                    name = "Евгений",
-                    amountRub = report.eugeneSpentRub,
-                    count = report.eugeneCount,
-                    percent = eugenePct,
-                    accentColor = palette.eugeneColor,
-                    modifier = Modifier.weight(1f)
-                )
-                MemberStatBox(
-                    name = "Анжелика",
-                    amountRub = report.anzhelikaSpentRub,
-                    count = report.anzhelikaCount,
-                    percent = anzhelikaPct,
-                    accentColor = palette.anzhelikaColor,
-                    modifier = Modifier.weight(1f)
-                )
-            }
+            if (!FamilyPreferences.isSoloProfile) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    MemberStatBox(
+                        name = "Евгений",
+                        amountRub = report.eugeneSpentRub,
+                        count = report.eugeneCount,
+                        percent = eugenePct,
+                        accentColor = palette.eugeneColor,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MemberStatBox(
+                        name = "Анжелика",
+                        amountRub = report.anzhelikaSpentRub,
+                        count = report.anzhelikaCount,
+                        percent = anzhelikaPct,
+                        accentColor = palette.anzhelikaColor,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(palette.surfaceElevated)
-            ) {
-                if (report.eugeneSpentRub + report.anzhelikaSpentRub > 0.0) {
-                    val eWeight = (report.eugeneSpentRub / total).toFloat().coerceIn(0.02f, 0.98f)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .weight(eWeight)
-                            .background(palette.eugeneColor)
-                    )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .weight((1f - eWeight).coerceAtLeast(0.02f))
-                            .background(palette.anzhelikaColor)
-                    )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(palette.surfaceElevated)
+                ) {
+                    if (report.eugeneSpentRub + report.anzhelikaSpentRub > 0.0) {
+                        val eWeight = (report.eugeneSpentRub / total).toFloat().coerceIn(0.02f, 0.98f)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .weight(eWeight)
+                                .background(palette.eugeneColor)
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .weight((1f - eWeight).coerceAtLeast(0.02f))
+                                .background(palette.anzhelikaColor)
+                        )
+                    }
                 }
             }
         }

@@ -31,13 +31,21 @@ android {
         applicationId = "ru.pokanevich.familybudget"
         minSdk = 26
         targetSdk = 34
-        versionCode = 27
-        versionName = "3.7.3"
+        versionCode = 28
+        versionName = "3.7.4"
 
         val syncToken = escapeForBuildConfig(System.getenv("SYNC_GITHUB_TOKEN"))
         val geminiApiKey = escapeForBuildConfig(System.getenv("GEMINI_API_KEY"))
+        val defaultFamilyCode = escapeForBuildConfig(System.getenv("DEFAULT_FAMILY_SPACE_CODE"))
+            .ifBlank { "POKANE-FAMILY" }
+        val defaultUserName = escapeForBuildConfig(System.getenv("DEFAULT_USER_NAME"))
+            .ifBlank { "Евгений" }
+        val isSoloProfile = defaultUserName !in setOf("Евгений", "Анжелика")
         buildConfigField("String", "DEFAULT_SYNC_TOKEN", "\"$syncToken\"")
         buildConfigField("String", "DEFAULT_GEMINI_API_KEY", "\"$geminiApiKey\"")
+        buildConfigField("String", "DEFAULT_FAMILY_SPACE_CODE", "\"$defaultFamilyCode\"")
+        buildConfigField("String", "DEFAULT_USER_NAME", "\"$defaultUserName\"")
+        buildConfigField("Boolean", "IS_SOLO_BUDGET_PROFILE", isSoloProfile.toString())
 
         vectorDrawables {
             useSupportLibrary = true

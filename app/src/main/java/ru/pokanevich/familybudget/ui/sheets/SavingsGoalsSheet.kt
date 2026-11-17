@@ -64,6 +64,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ru.pokanevich.familybudget.data.FamilyPreferences
 import ru.pokanevich.familybudget.data.SavingsGoalEntity
 import ru.pokanevich.familybudget.data.SavingsGoalProgress
 import ru.pokanevich.familybudget.ui.theme.AuthorAvatarCircle
@@ -863,37 +864,39 @@ fun GoalTransferDialog(
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    listOf("Евгений", "Анжелика").forEach { person ->
-                        val selected = selectedAuthor == person
-                        Surface(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { selectedAuthor = person },
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (selected) palette.surfaceElevated else palette.surfaceCard,
-                            border = BorderStroke(
-                                1.dp,
-                                if (selected) accent else palette.outlineSubtle
-                            )
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                AuthorAvatarCircle(authorName = person, size = 20.dp)
-                                Text(
-                                    text = person,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = palette.textPrimary,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                if (!FamilyPreferences.isSoloProfile) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf("Евгений", "Анжелика").forEach { person ->
+                            val selected = selectedAuthor == person
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable { selectedAuthor = person },
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (selected) palette.surfaceElevated else palette.surfaceCard,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selected) accent else palette.outlineSubtle
                                 )
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    AuthorAvatarCircle(authorName = person, size = 20.dp)
+                                    Text(
+                                        text = person,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = palette.textPrimary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
                     }

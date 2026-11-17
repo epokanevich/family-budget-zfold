@@ -187,45 +187,60 @@ fun FamilySettingsSheet(
 
             // Section 1: User & Family Budget
             SettingsGroupCard(title = "Профиль и бюджет") {
-                Text(
-                    text = "Кто пользуется этим телефоном",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.textSecondary
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    listOf("Евгений", "Анжелика").forEach { person ->
-                        val selected = name == person
-                        val isAnzhelika = person == "Анжелика"
-                        val accent = if (isAnzhelika) palette.anzhelikaColor else palette.eugeneColor
-                        val soft = if (isAnzhelika) palette.anzhelikaSoft else palette.eugeneSoft
+                if (FamilyPreferences.isSoloProfile) {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        label = { Text("Имя владельца бюджета") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.accentEmerald,
+                            unfocusedBorderColor = palette.outlineSubtle
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    Text(
+                        text = "Кто пользуется этим телефоном",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textSecondary
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        listOf("Евгений", "Анжелика").forEach { person ->
+                            val selected = name == person
+                            val isAnzhelika = person == "Анжелика"
+                            val accent = if (isAnzhelika) palette.anzhelikaColor else palette.eugeneColor
+                            val soft = if (isAnzhelika) palette.anzhelikaSoft else palette.eugeneSoft
 
-                        Surface(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(14.dp))
-                                .clickable { name = person },
-                            shape = RoundedCornerShape(14.dp),
-                            color = if (selected) soft else palette.surfaceCard,
-                            border = BorderStroke(
-                                width = if (selected) 1.5.dp else 1.dp,
-                                color = if (selected) accent else palette.outlineSubtle
-                            )
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                AuthorAvatarCircle(authorName = person, size = 24.dp)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = person,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = if (selected) accent else palette.textSecondary
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .clickable { name = person },
+                                shape = RoundedCornerShape(14.dp),
+                                color = if (selected) soft else palette.surfaceCard,
+                                border = BorderStroke(
+                                    width = if (selected) 1.5.dp else 1.dp,
+                                    color = if (selected) accent else palette.outlineSubtle
                                 )
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    AuthorAvatarCircle(authorName = person, size = 24.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = person,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        color = if (selected) accent else palette.textSecondary
+                                    )
+                                }
                             }
                         }
                     }

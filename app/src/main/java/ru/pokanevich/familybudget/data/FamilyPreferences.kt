@@ -109,11 +109,11 @@ class FamilyPreferences(context: Context) : PinLockStorage {
         runCatching { prefs.getString(key, default) }.getOrNull() ?: default
 
     var currentUserName: String
-        get() = safeGetString("user_name", "Евгений")
+        get() = safeGetString("user_name", defaultUserName)
         set(value) = prefs.edit().putString("user_name", value).apply()
 
     var familySpaceCode: String
-        get() = safeGetString("family_space_code", "POKANE-FAMILY")
+        get() = safeGetString("family_space_code", defaultFamilySpaceCode)
         set(value) = prefs.edit().putString("family_space_code", value.trim().uppercase()).apply()
 
     var monthlyBudgetRub: Double
@@ -327,7 +327,16 @@ class FamilyPreferences(context: Context) : PinLockStorage {
         private const val KEY_PIN_AUTO_LOCK_TIMEOUT_MS = "pin_auto_lock_timeout_ms"
         private const val KEY_HIDE_AMOUNTS_ON_WIDGET = "hide_amounts_on_widget"
 
+        val defaultFamilySpaceCode: String
+            get() = BuildConfig.DEFAULT_FAMILY_SPACE_CODE.trim().ifBlank { "POKANE-FAMILY" }
+
+        val defaultUserName: String
+            get() = BuildConfig.DEFAULT_USER_NAME.trim().ifBlank { "Евгений" }
+
+        val isSoloProfile: Boolean
+            get() = BuildConfig.IS_SOLO_BUDGET_PROFILE
+
         fun normalizeFamilyCode(raw: String): String =
-            raw.trim().ifBlank { "POKANE-FAMILY" }.replace(Regex("[^A-Za-z0-9_-]"), "_")
+            raw.trim().ifBlank { defaultFamilySpaceCode }.replace(Regex("[^A-Za-z0-9_-]"), "_")
     }
 }

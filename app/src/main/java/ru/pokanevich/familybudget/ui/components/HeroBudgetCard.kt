@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import ru.pokanevich.familybudget.ai.AiBudgetReport
+import ru.pokanevich.familybudget.data.FamilyPreferences
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
 import ru.pokanevich.familybudget.ui.util.BudgetPeriod
 import ru.pokanevich.familybudget.ui.util.Formatters
@@ -266,62 +267,64 @@ fun HeroBudgetCard(
                         modifier = Modifier.weight(1f)
                     )
 
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    if (!FamilyPreferences.isSoloProfile) {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Box(
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(palette.eugeneColor)
+                                )
+                                Text(
+                                    text = "Е ${(eugeneRatio * 100).roundToInt()}%",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White.copy(alpha = 0.9f)
+                                )
+                                Spacer(modifier = Modifier.width(2.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(palette.anzhelikaColor)
+                                )
+                                Text(
+                                    text = "А ${100 - (eugeneRatio * 100).roundToInt()}%",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color.White.copy(alpha = 0.9f)
+                                )
+                            }
+                            Row(
                                 modifier = Modifier
-                                    .size(7.dp)
-                                    .clip(CircleShape)
-                                    .background(palette.eugeneColor)
-                            )
-                            Text(
-                                text = "Е ${(eugeneRatio * 100).roundToInt()}%",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha = 0.9f)
-                            )
-                            Spacer(modifier = Modifier.width(2.dp))
-                            Box(
-                                modifier = Modifier
-                                    .size(7.dp)
-                                    .clip(CircleShape)
-                                    .background(palette.anzhelikaColor)
-                            )
-                            Text(
-                                text = "А ${100 - (eugeneRatio * 100).roundToInt()}%",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color.White.copy(alpha = 0.9f)
-                            )
-                        }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(5.dp)
-                                .clip(RoundedCornerShape(999.dp))
-                                .background(Color.White.copy(alpha = 0.16f))
-                        ) {
-                            if (eugene + anzhelika > 0.0) {
-                                if (eugeneRatio > 0f) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxHeight()
-                                            .weight(eugeneRatio.coerceAtLeast(0.01f))
-                                            .background(palette.eugeneColor)
-                                    )
-                                }
-                                val aRatio = (1f - eugeneRatio).coerceAtLeast(0f)
-                                if (aRatio > 0f) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxHeight()
-                                            .weight(aRatio.coerceAtLeast(0.01f))
-                                            .background(palette.anzhelikaColor)
-                                    )
+                                    .fillMaxWidth()
+                                    .height(5.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(Color.White.copy(alpha = 0.16f))
+                            ) {
+                                if (eugene + anzhelika > 0.0) {
+                                    if (eugeneRatio > 0f) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxHeight()
+                                                .weight(eugeneRatio.coerceAtLeast(0.01f))
+                                                .background(palette.eugeneColor)
+                                        )
+                                    }
+                                    val aRatio = (1f - eugeneRatio).coerceAtLeast(0f)
+                                    if (aRatio > 0f) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxHeight()
+                                                .weight(aRatio.coerceAtLeast(0.01f))
+                                                .background(palette.anzhelikaColor)
+                                        )
+                                    }
                                 }
                             }
                         }
