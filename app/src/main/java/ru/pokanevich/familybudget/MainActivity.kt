@@ -310,12 +310,13 @@ fun FamilyBudgetApp(
         }
     }
 
-    val aiReport = remember(confirmedExpenses, monthlyBudgetRub, periodWindow, categoryRegistry) {
+    val aiReport = remember(confirmedExpenses, monthlyBudgetRub, periodWindow, categoryRegistry, recurringPayments) {
         AiBudgetAdvisor.buildInstantLocalReport(
             expenses = confirmedExpenses,
             monthlyBudgetRub = monthlyBudgetRub,
             window = periodWindow,
-            registry = categoryRegistry
+            registry = categoryRegistry,
+            recurringPayments = recurringPayments
         )
     }
 

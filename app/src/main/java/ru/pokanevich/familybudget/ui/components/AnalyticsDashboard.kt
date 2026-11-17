@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -248,6 +249,35 @@ fun AiAnalyticsPane(
                         style = MaterialTheme.typography.bodyMedium,
                         color = palette.textPrimary
                     )
+                }
+
+                if (report.upcomingRecurringReserveRub > 0.0) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(palette.surfaceElevated)
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Резерв под будущие списания: ${Formatters.formatRub(report.upcomingRecurringReserveRub)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.textSecondary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Ритм: ${report.safeDailySpendRemainingRub.roundToInt()} ₽/день",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.textPrimary,
+                            maxLines = 1
+                        )
+                    }
                 }
 
                 if (cloudAdvice != null) {

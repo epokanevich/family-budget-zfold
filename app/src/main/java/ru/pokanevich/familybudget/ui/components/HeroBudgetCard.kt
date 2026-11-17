@@ -213,6 +213,35 @@ fun HeroBudgetCard(
                     }
                 }
 
+                if (report.upcomingRecurringReserveRub > 0.0) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color.White.copy(alpha = 0.12f))
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Резерв под будущие списания: ${Formatters.formatRub(report.upcomingRecurringReserveRub)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.90f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "${report.safeDailySpendRemainingRub.roundToInt()} ₽/день",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFFDE68A),
+                            maxLines = 1
+                        )
+                    }
+                }
+
                 // Bottom frosted metric strip
                 Row(
                     modifier = Modifier

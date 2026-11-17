@@ -8,6 +8,9 @@ import ru.pokanevich.familybudget.data.CategoryDescriptor
 import ru.pokanevich.familybudget.data.CategoryLimitMode
 import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
+import ru.pokanevich.familybudget.data.OperationType
+import ru.pokanevich.familybudget.data.RecurringPaymentEntity
+import ru.pokanevich.familybudget.data.RecurringPaymentScheduler
 import ru.pokanevich.familybudget.ui.util.BudgetPeriod
 import ru.pokanevich.familybudget.ui.util.Formatters
 import ru.pokanevich.familybudget.ui.util.PeriodCalculator
@@ -45,6 +48,8 @@ data class AiBudgetReport(
     val monthlyBudgetRub: Double,
     val expectedSpentByTodayRub: Double,
     val safeDailySpendRemainingRub: Double,
+    val upcomingRecurringReserveRub: Double = 0.0,
+    val freeBudgetAfterReserveRub: Double = 0.0,
     val daysLeftInMonth: Int,
     val monthProgressRatio: Float,
     val isCurrentMonth: Boolean,
@@ -91,7 +96,9 @@ object AiBudgetAdvisor {
         expenses: List<ExpenseEntity>,
         monthlyBudgetRub: Double,
         window: PeriodWindow = PeriodCalculator.buildWindow(BudgetPeriod.MONTH, System.currentTimeMillis()),
-        registry: CategoryRegistry = CategoryRegistry.DEFAULT
+        registry: CategoryRegistry = CategoryRegistry.DEFAULT,
+        recurringPayments: List<RecurringPaymentEntity> = emptyList(),
+        nowMs: Long = System.currentTimeMillis()
     ): AiBudgetReport {
         val activeAll = expenses.filter {
             !it.isDeleted && !it.isPendingConfirmation && !it.isTransfer(registry)
@@ -123,9 +130,39 @@ object AiBudgetAdvisor {
         }
 
         val expectedByToday = periodBudget * window.progressRatio.toDouble()
-        val remainingBudget = (periodBudget - totalSpent).coerceAtLeast(0.0)
+        val upcomingRecurringReserveRub = if (
+            window.period == BudgetPeriod.MONTH &&
+            window.isCurrentPeriod &&
+            recurringPayments.isNotEmpty()
+        ) {
+            val currentMonthKey = RecurringPaymentScheduler.periodKeyFor(nowMs)
+            val confirmedCurrentMonthIds = expenses.asSequence()
+                .filter {
+                    !it.isDeleted &&
+                        !it.isPendingConfirmation &&
+                        it.createdAtEpochMs in window.startMs..window.endMs
+                }
+                .map { it.id }
+                .toHashSet()
+
+            recurringPayments
+                .asSequence()
+                .filter { p ->
+                    p.isActive &&
+                        !p.isDeleted &&
+                        p.effectiveOperationType == OperationType.EXPENSE &&
+                        p.lastPaidPeriodKey != currentMonthKey &&
+                        RecurringPaymentScheduler.deterministicExpenseId(p.id, currentMonthKey) !in confirmedCurrentMonthIds
+                }
+                .sumOf { it.amountRub.coerceAtLeast(0.0) }
+        } else {
+            0.0
+        }
+
+        val freeBudgetBeforeReserve = periodBudget - totalSpent
+        val freeBudgetAfterReserve = (freeBudgetBeforeReserve - upcomingRecurringReserveRub).coerceAtLeast(0.0)
         val safeDaily = if (window.daysLeftInPeriod > 0) {
-            remainingBudget / window.daysLeftInPeriod.toDouble()
+            freeBudgetAfterReserve / window.daysLeftInPeriod.toDouble()
         } else {
             0.0
         }
@@ -219,6 +256,11 @@ object AiBudgetAdvisor {
             .sortedByDescending { it.expectedByTodayRub - it.spentRub }
 
         val netPeriod = totalIncome - totalSpent
+        val reserveSuffix = if (upcomingRecurringReserveRub > 0.5) {
+            " (учтён резерв ${Formatters.formatRub(upcomingRecurringReserveRub)} под регулярные списания)"
+        } else {
+            ""
+        }
         val headline = when {
             window.period == BudgetPeriod.ALL ->
                 "За всё время: доходы ${Formatters.formatRub(allTimeIncome, true)}, расходы ${Formatters.formatRub(allTimeExpense, true)}, итог ${Formatters.formatRub(allTimeBalance, true)}."
@@ -233,11 +275,15 @@ object AiBudgetAdvisor {
                     "Итог месяца: расходы превысили доходы на ${Formatters.formatRub(-netPeriod, true)}."
                 }
             totalSpent > expectedByToday * 1.12 ->
-                "Темп выше плана на ${(totalSpent - expectedByToday).roundToInt()} ₽. Комфортный ритм — ${safeDaily.roundToInt()} ₽/день."
+                "Темп выше плана на ${(totalSpent - expectedByToday).roundToInt()} ₽. Комфортный ритм — ${safeDaily.roundToInt()} ₽/день$reserveSuffix."
             totalSpent < expectedByToday * 0.85 ->
-                "Отличный запас! Вы ниже графика на ${(expectedByToday - totalSpent).roundToInt()} ₽ — можно спокойно позволить приятные покупки."
+                if (upcomingRecurringReserveRub > 0.5) {
+                    "Отличный запас! Вы ниже графика на ${(expectedByToday - totalSpent).roundToInt()} ₽. С учётом резерва ${Formatters.formatRub(upcomingRecurringReserveRub)} под регулярные списания — ритм ${safeDaily.roundToInt()} ₽/день."
+                } else {
+                    "Отличный запас! Вы ниже графика на ${(expectedByToday - totalSpent).roundToInt()} ₽ — можно спокойно позволить приятные покупки."
+                }
             else ->
-                "Ровный темп по графику. Безопасный дневной ритм: ${safeDaily.roundToInt()} ₽/день."
+                "Ровный темп по графику. Безопасный дневной ритм: ${safeDaily.roundToInt()} ₽/день$reserveSuffix."
         }
 
         return AiBudgetReport(
@@ -250,6 +296,8 @@ object AiBudgetAdvisor {
             monthlyBudgetRub = periodBudget,
             expectedSpentByTodayRub = expectedByToday,
             safeDailySpendRemainingRub = safeDaily,
+            upcomingRecurringReserveRub = upcomingRecurringReserveRub,
+            freeBudgetAfterReserveRub = freeBudgetAfterReserve,
             daysLeftInMonth = window.daysLeftInPeriod,
             monthProgressRatio = window.progressRatio,
             isCurrentMonth = window.isCurrentPeriod,
