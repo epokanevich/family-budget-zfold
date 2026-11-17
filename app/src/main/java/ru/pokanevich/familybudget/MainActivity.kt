@@ -567,7 +567,7 @@ fun FamilyBudgetApp(
                 showAddEditSheet = false
                 editingExpense = null
             },
-            onSave = { amount, merchant, category, author ->
+            onSave = { amount, merchant, category, author, note, operationType ->
                 val existing = editingExpense
                 scope.launch {
                     if (existing != null) {
@@ -576,7 +576,9 @@ fun FamilyBudgetApp(
                                 amountRub = amount,
                                 merchant = merchant,
                                 categoryName = category.name,
-                                authorName = author
+                                authorName = author,
+                                note = note,
+                                operationType = operationType
                             )
                         )
                     } else {
@@ -586,7 +588,9 @@ fun FamilyBudgetApp(
                                 merchant = merchant,
                                 categoryName = category.name,
                                 authorName = author,
-                                sourceType = if (prefilledAmount.isNotEmpty()) "QR_RECEIPT" else "MANUAL"
+                                sourceType = if (prefilledAmount.isNotEmpty()) "QR_RECEIPT" else "MANUAL",
+                                note = note,
+                                operationType = operationType
                             )
                         )
                     }

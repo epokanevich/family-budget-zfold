@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -54,11 +55,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.pokanevich.familybudget.data.ExpenseCategory
 import ru.pokanevich.familybudget.data.ExpenseEntity
+import ru.pokanevich.familybudget.data.OperationType
 import ru.pokanevich.familybudget.ui.theme.AuthorAvatarCircle
 import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
 import ru.pokanevich.familybudget.ui.theme.visual
-import kotlin.math.roundToInt
+import ru.pokanevich.familybudget.ui.util.AmountExpressionEvaluator
+import ru.pokanevich.familybudget.ui.util.Formatters
 
 private val quickExpenseMerchants = listOf(
     "Пятёрочка", "ВкусВилл", "Кофе", "Обед", "Аптека", "АЗС", "Ozon"
@@ -66,6 +69,10 @@ private val quickExpenseMerchants = listOf(
 
 private val quickIncomeNotes = listOf(
     "Зарплата", "Аванс", "Проценты", "Подарок", "Кэшбэк"
+)
+
+private val quickTransferTargets = listOf(
+    "На карту", "Накопительный счёт", "Наличные", "Между счетами"
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -77,28 +84,38 @@ fun AddEditExpenseSheet(
     defaultAuthorName: String,
     onOpenQrScanner: () -> Unit,
     onDismiss: () -> Unit,
-    onSave: (amountRub: Double, merchant: String, category: ExpenseCategory, authorName: String) -> Unit
+    onSave: (
+        amountRub: Double,
+        merchant: String,
+        category: ExpenseCategory,
+        authorName: String,
+        note: String,
+        operationType: String
+    ) -> Unit
 ) {
     val palette = LocalFamilyPalette.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val startAmount = when {
-        editingExpense != null -> {
-            val v = editingExpense.amountRub
-            if (v % 1.0 == 0.0) v.roundToInt().toString() else v.toString()
-        }
+        editingExpense != null -> AmountExpressionEvaluator.formatForInput(editingExpense.amountRub)
         else -> initialAmount
     }
     val startMerchant = editingExpense?.merchant ?: initialMerchant
-    val startIsIncome = editingExpense?.isIncome ?: false
-    val startCategory = editingExpense?.category ?: ExpenseCategory.guessFromMerchant(startMerchant, startIsIncome)
+    val startOperationType = editingExpense?.effectiveOperationType ?: OperationType.EXPENSE
+    val startCategory = editingExpense?.category
+        ?: ExpenseCategory.guessFromMerchant(startMerchant, startOperationType == OperationType.INCOME)
     val startAuthor = editingExpense?.authorName ?: defaultAuthorName
+    val startNote = editingExpense?.note.orEmpty()
 
-    var isIncomeMode by remember(editingExpense) { mutableStateOf(startIsIncome) }
+    var selectedOperationType by remember(editingExpense) { mutableStateOf(startOperationType) }
     var amountText by remember(editingExpense, initialAmount) { mutableStateOf(startAmount) }
     var merchantText by remember(editingExpense, initialMerchant) { mutableStateOf(startMerchant) }
+    var noteText by remember(editingExpense) { mutableStateOf(startNote) }
     var selectedCategory by remember(editingExpense, initialMerchant) { mutableStateOf(startCategory) }
     var selectedAuthor by remember(editingExpense, defaultAuthorName) { mutableStateOf(startAuthor) }
+
+    val isIncomeMode = selectedOperationType == OperationType.INCOME
+    val isTransferMode = selectedOperationType == OperationType.TRANSFER
 
     val activeCategories = if (isIncomeMode) {
         ExpenseCategory.incomeCategories
@@ -106,8 +123,12 @@ fun AddEditExpenseSheet(
         ExpenseCategory.expenseCategories
     }
 
-    val parsedAmount = amountText.replace(",", ".").replace(" ", "").toDoubleOrNull() ?: 0.0
-    val isValid = parsedAmount > 0.0
+    val evaluatedAmount = remember(amountText) { AmountExpressionEvaluator.evaluate(amountText) }
+    val parsedAmount = evaluatedAmount ?: 0.0
+    val isValid = evaluatedAmount != null
+    val showExpressionPreview = remember(amountText, evaluatedAmount) {
+        AmountExpressionEvaluator.hasOperators(amountText) && evaluatedAmount != null
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -136,7 +157,7 @@ fun AddEditExpenseSheet(
                     style = MaterialTheme.typography.titleLarge,
                     color = palette.textPrimary
                 )
-                if (editingExpense == null && !isIncomeMode) {
+                if (editingExpense == null && selectedOperationType == OperationType.EXPENSE) {
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = palette.accentBlueSoft,
@@ -166,7 +187,7 @@ fun AddEditExpenseSheet(
                 }
             }
 
-            // РАСХОДЫ / ДОХОДЫ Switcher
+            // РАСХОД / ДОХОД / ПЕРЕВОД Switcher
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp),
@@ -178,19 +199,35 @@ fun AddEditExpenseSheet(
                         .padding(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    listOf(false to "Расход", true to "Доход").forEach { (inc, label) ->
-                        val active = isIncomeMode == inc
-                        val accent = if (inc) palette.accentEmerald else palette.accentCoral
+                    listOf(
+                        OperationType.EXPENSE to "Расход",
+                        OperationType.INCOME to "Доход",
+                        OperationType.TRANSFER to "Перевод"
+                    ).forEach { (opType, label) ->
+                        val active = selectedOperationType == opType
+                        val accent = when (opType) {
+                            OperationType.EXPENSE -> palette.accentCoral
+                            OperationType.INCOME -> palette.accentEmerald
+                            OperationType.TRANSFER -> palette.accentBlue
+                        }
                         Surface(
                             modifier = Modifier
                                 .weight(1f)
                                 .clip(RoundedCornerShape(11.dp))
                                 .clickable {
-                                    isIncomeMode = inc
-                                    selectedCategory = if (inc) {
-                                        ExpenseCategory.INCOME_SALARY
-                                    } else {
-                                        ExpenseCategory.GROCERIES
+                                    selectedOperationType = opType
+                                    when (opType) {
+                                        OperationType.EXPENSE -> {
+                                            if (selectedCategory.isIncome) {
+                                                selectedCategory = ExpenseCategory.GROCERIES
+                                            }
+                                        }
+                                        OperationType.INCOME -> {
+                                            if (!selectedCategory.isIncome) {
+                                                selectedCategory = ExpenseCategory.INCOME_SALARY
+                                            }
+                                        }
+                                        OperationType.TRANSFER -> Unit
                                     }
                                 },
                             shape = RoundedCornerShape(11.dp),
@@ -203,6 +240,7 @@ fun AddEditExpenseSheet(
                                 fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
                                 color = if (active) accent else palette.textSecondary,
                                 textAlign = TextAlign.Center,
+                                maxLines = 1,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 9.dp)
@@ -245,21 +283,29 @@ fun AddEditExpenseSheet(
                             BasicTextField(
                                 value = amountText,
                                 onValueChange = { raw ->
-                                    val filtered = raw.filter { it.isDigit() || it == '.' || it == ',' }
-                                    if (filtered.count { it == '.' || it == ',' } <= 1) {
-                                        amountText = filtered
+                                    val filtered = raw.filter {
+                                        it.isDigit() || it == '.' || it == ',' || it == ' ' ||
+                                            it == '+' || it == '-' || it == '−' ||
+                                            it == '*' || it == '×' ||
+                                            it == '/' || it == '÷' ||
+                                            it == '(' || it == ')'
                                     }
+                                    amountText = filtered
                                 },
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                                 cursorBrush = SolidColor(palette.accentEmerald),
                                 textStyle = TextStyle(
-                                    fontSize = 36.sp,
+                                    fontSize = 34.sp,
                                     fontWeight = FontWeight.ExtraBold,
-                                    color = if (isIncomeMode) palette.accentEmerald else palette.textPrimary,
+                                    color = when (selectedOperationType) {
+                                        OperationType.INCOME -> palette.accentEmerald
+                                        OperationType.TRANSFER -> palette.accentBlue
+                                        OperationType.EXPENSE -> palette.textPrimary
+                                    },
                                     textAlign = TextAlign.Center
                                 ),
-                                modifier = Modifier.width(190.dp)
+                                modifier = Modifier.widthIn(min = 60.dp, max = 230.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(4.dp))
@@ -269,6 +315,77 @@ fun AddEditExpenseSheet(
                             fontWeight = FontWeight.Bold,
                             color = palette.accentEmerald
                         )
+                    }
+
+                    if (showExpressionPreview && evaluatedAmount != null) {
+                        Text(
+                            text = "= ${Formatters.formatRub(evaluatedAmount, showKopecksIfAny = true)}",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.accentEmerald
+                        )
+                    }
+
+                    // Компактная строка быстрых кнопок операторов (+, −, ×, ÷, =)
+                    val operatorChars = setOf('+', '-', '−', '*', '×', '/', '÷')
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("+", "−", "×", "÷").forEach { op ->
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = palette.surfaceCard,
+                                border = BorderStroke(1.dp, palette.outlineSubtle),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable {
+                                        val trimmed = amountText.trimEnd()
+                                        if (trimmed.isEmpty()) {
+                                            if (op == "−") amountText = "−"
+                                        } else if (trimmed.last() in operatorChars) {
+                                            amountText = trimmed.dropLast(1) + op
+                                        } else {
+                                            amountText = trimmed + op
+                                        }
+                                    }
+                            ) {
+                                Text(
+                                    text = op,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = palette.textPrimary,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(vertical = 5.dp)
+                                )
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (evaluatedAmount != null) palette.accentEmeraldSoft else palette.surfaceCard,
+                            border = BorderStroke(
+                                width = 1.dp,
+                                color = if (evaluatedAmount != null) palette.accentEmerald else palette.outlineSubtle
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable(enabled = evaluatedAmount != null) {
+                                    if (evaluatedAmount != null) {
+                                        amountText = AmountExpressionEvaluator.formatForInput(evaluatedAmount)
+                                    }
+                                }
+                        ) {
+                            Text(
+                                text = "=",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = if (evaluatedAmount != null) palette.accentEmerald else palette.textMuted,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(vertical = 5.dp)
+                            )
+                        }
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -281,11 +398,7 @@ fun AddEditExpenseSheet(
                                     .clip(RoundedCornerShape(999.dp))
                                     .clickable {
                                         val next = parsedAmount + addVal
-                                        amountText = if (next % 1.0 == 0.0) {
-                                            next.roundToInt().toString()
-                                        } else {
-                                            next.toString()
-                                        }
+                                        amountText = AmountExpressionEvaluator.formatForInput(next)
                                     }
                             ) {
                                 Text(
@@ -304,7 +417,11 @@ fun AddEditExpenseSheet(
             // Payer / Author Toggle
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    text = if (isIncomeMode) "Чей доход" else "Кто оплатил",
+                    text = when (selectedOperationType) {
+                        OperationType.INCOME -> "Чей доход"
+                        OperationType.TRANSFER -> "Кто перевёл"
+                        OperationType.EXPENSE -> "Кто оплатил"
+                    },
                     style = MaterialTheme.typography.labelMedium,
                     color = palette.textSecondary
                 )
@@ -348,21 +465,37 @@ fun AddEditExpenseSheet(
                 }
             }
 
-            // Merchant / Note Field + Quick Chips
+            // Merchant + Note Fields + Quick Chips
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = merchantText,
                     onValueChange = {
                         merchantText = it
-                        if (editingExpense == null) {
+                        if (editingExpense == null && !isTransferMode) {
                             val guessed = ExpenseCategory.guessFromMerchant(it, isIncomeMode)
                             if (guessed != ExpenseCategory.OTHER && guessed != ExpenseCategory.INCOME_OTHER) {
                                 selectedCategory = guessed
                             }
                         }
                     },
-                    label = { Text(if (isIncomeMode) "Источник или комментарий" else "Магазин или комментарий") },
-                    placeholder = { Text(if (isIncomeMode) "Например, Аванс" else "Например, Пятёрочка") },
+                    label = {
+                        Text(
+                            when (selectedOperationType) {
+                                OperationType.INCOME -> "Источник дохода"
+                                OperationType.TRANSFER -> "Куда / откуда перевод"
+                                OperationType.EXPENSE -> "Магазин или получатель"
+                            }
+                        )
+                    },
+                    placeholder = {
+                        Text(
+                            when (selectedOperationType) {
+                                OperationType.INCOME -> "Например, Аванс"
+                                OperationType.TRANSFER -> "Например, На накопительный счёт"
+                                OperationType.EXPENSE -> "Например, Пятёрочка"
+                            }
+                        )
+                    },
                     singleLine = true,
                     shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -370,7 +503,7 @@ fun AddEditExpenseSheet(
                         unfocusedBorderColor = palette.outlineSubtle
                     ),
                     trailingIcon = {
-                        if (editingExpense == null && !isIncomeMode) {
+                        if (editingExpense == null && selectedOperationType == OperationType.EXPENSE) {
                             IconButton(onClick = onOpenQrScanner) {
                                 Icon(
                                     imageVector = Icons.Rounded.QrCodeScanner,
@@ -384,7 +517,11 @@ fun AddEditExpenseSheet(
                 )
 
                 if (editingExpense == null && merchantText.isBlank()) {
-                    val suggestions = if (isIncomeMode) quickIncomeNotes else quickExpenseMerchants
+                    val suggestions = when (selectedOperationType) {
+                        OperationType.INCOME -> quickIncomeNotes
+                        OperationType.TRANSFER -> quickTransferTargets
+                        OperationType.EXPENSE -> quickExpenseMerchants
+                    }
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         items(suggestions) { sample ->
                             Surface(
@@ -394,9 +531,11 @@ fun AddEditExpenseSheet(
                                     .clip(RoundedCornerShape(10.dp))
                                     .clickable {
                                         merchantText = sample
-                                        val guessed = ExpenseCategory.guessFromMerchant(sample, isIncomeMode)
-                                        if (guessed != ExpenseCategory.OTHER && guessed != ExpenseCategory.INCOME_OTHER) {
-                                            selectedCategory = guessed
+                                        if (!isTransferMode) {
+                                            val guessed = ExpenseCategory.guessFromMerchant(sample, isIncomeMode)
+                                            if (guessed != ExpenseCategory.OTHER && guessed != ExpenseCategory.INCOME_OTHER) {
+                                                selectedCategory = guessed
+                                            }
                                         }
                                     }
                             ) {
@@ -410,59 +549,75 @@ fun AddEditExpenseSheet(
                         }
                     }
                 }
+
+                OutlinedTextField(
+                    value = noteText,
+                    onValueChange = { noteText = it },
+                    label = { Text("Заметка (необязательно)") },
+                    placeholder = { Text("Комментарий или детали операции") },
+                    maxLines = 3,
+                    shape = RoundedCornerShape(14.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = palette.accentEmerald,
+                        unfocusedBorderColor = palette.outlineSubtle
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
 
-            // 4-column Visual Category Grid
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "Категория",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = palette.textSecondary
-                )
-                activeCategories.chunked(4).forEach { rowCats ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        rowCats.forEach { cat ->
-                            val selected = selectedCategory == cat
-                            val vis = cat.visual()
-                            val tint = if (palette.isDark) vis.darkModeColor else vis.color
+            // 4-column Visual Category Grid (скрывается для переводов между своими)
+            if (!isTransferMode) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Категория",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.textSecondary
+                    )
+                    activeCategories.chunked(4).forEach { rowCats ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            rowCats.forEach { cat ->
+                                val selected = selectedCategory == cat
+                                val vis = cat.visual()
+                                val tint = if (palette.isDark) vis.darkModeColor else vis.color
 
-                            Surface(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .clickable { selectedCategory = cat },
-                                shape = RoundedCornerShape(14.dp),
-                                color = if (selected) tint.copy(alpha = 0.14f) else palette.surfaceElevated,
-                                border = if (selected) BorderStroke(1.5.dp, tint) else null
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(vertical = 9.dp, horizontal = 4.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                                Surface(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .clickable { selectedCategory = cat },
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = if (selected) tint.copy(alpha = 0.14f) else palette.surfaceElevated,
+                                    border = if (selected) BorderStroke(1.5.dp, tint) else null
                                 ) {
-                                    CategoryIconBadge(
-                                        category = cat,
-                                        size = 34.dp,
-                                        iconSize = 18.dp,
-                                        cornerRadius = 11.dp
-                                    )
-                                    Text(
-                                        text = cat.shortName,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (selected) tint else palette.textSecondary,
-                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        textAlign = TextAlign.Center
-                                    )
+                                    Column(
+                                        modifier = Modifier.padding(vertical = 9.dp, horizontal = 4.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        CategoryIconBadge(
+                                            category = cat,
+                                            size = 34.dp,
+                                            iconSize = 18.dp,
+                                            cornerRadius = 11.dp
+                                        )
+                                        Text(
+                                            text = cat.shortName,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (selected) tint else palette.textSecondary,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            textAlign = TextAlign.Center
+                                        )
+                                    }
                                 }
                             }
-                        }
-                        repeat(4 - rowCats.size) {
-                            Spacer(modifier = Modifier.weight(1f))
+                            repeat(4 - rowCats.size) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
                         }
                     }
                 }
@@ -471,17 +626,23 @@ fun AddEditExpenseSheet(
             Button(
                 enabled = isValid,
                 onClick = {
+                    val saveCategory = if (isTransferMode) ExpenseCategory.OTHER else selectedCategory
+                    val saveMerchant = merchantText.trim().ifBlank {
+                        if (isTransferMode) "Перевод между своими" else saveCategory.displayName
+                    }
                     onSave(
                         parsedAmount,
-                        merchantText.trim().ifBlank { selectedCategory.displayName },
-                        selectedCategory,
-                        selectedAuthor
+                        saveMerchant,
+                        saveCategory,
+                        selectedAuthor,
+                        noteText.trim(),
+                        selectedOperationType.name
                     )
                 },
                 shape = RoundedCornerShape(16.dp),
                 contentPadding = PaddingValues(vertical = 15.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = palette.accentEmerald,
+                    containerColor = if (isTransferMode) palette.accentBlue else palette.accentEmerald,
                     contentColor = Color.White,
                     disabledContainerColor = palette.surfaceElevated,
                     disabledContentColor = palette.textMuted
@@ -494,6 +655,7 @@ fun AddEditExpenseSheet(
                     text = when {
                         editingExpense != null -> "Сохранить изменения"
                         isIncomeMode -> "Добавить доход"
+                        isTransferMode -> "Добавить перевод"
                         else -> "Добавить в бюджет"
                     },
                     style = MaterialTheme.typography.titleSmall,

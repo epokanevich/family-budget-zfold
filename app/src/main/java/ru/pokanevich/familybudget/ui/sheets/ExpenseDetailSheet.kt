@@ -98,8 +98,27 @@ fun ExpenseDetailSheet(
                 Text(
                     text = if (expense.isIncome) "+$formatted" else formatted,
                     style = MaterialTheme.typography.headlineLarge,
-                    color = if (expense.isIncome) palette.accentEmerald else palette.textPrimary
+                    color = when {
+                        expense.isIncome -> palette.accentEmerald
+                        expense.isTransfer -> palette.textSecondary
+                        else -> palette.textPrimary
+                    }
                 )
+                if (expense.isTransfer) {
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = palette.surfaceElevated,
+                        border = BorderStroke(1.dp, palette.outlineSubtle)
+                    ) {
+                        Text(
+                            text = "Перевод между своими",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = palette.textSecondary,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        )
+                    }
+                }
             }
 
             // Metadata Card
@@ -112,17 +131,34 @@ fun ExpenseDetailSheet(
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    DetailInfoRow(label = "Оплатил(а)") {
+                    DetailInfoRow(
+                        label = when {
+                            expense.isIncome -> "Чей доход"
+                            expense.isTransfer -> "Кто перевёл"
+                            else -> "Оплатил(а)"
+                        }
+                    ) {
                         AuthorPill(authorName = expense.authorName)
                     }
                     HorizontalDivider(thickness = 0.6.dp, color = palette.outlineSubtle)
-                    DetailInfoRow(label = "Категория") {
-                        Text(
-                            text = expense.category.displayName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = palette.textPrimary
-                        )
+                    if (expense.isTransfer) {
+                        DetailInfoRow(label = "Статус") {
+                            Text(
+                                text = "Перевод между своими",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = palette.textSecondary
+                            )
+                        }
+                    } else {
+                        DetailInfoRow(label = "Категория") {
+                            Text(
+                                text = expense.category.displayName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = palette.textPrimary
+                            )
+                        }
                     }
                     HorizontalDivider(thickness = 0.6.dp, color = palette.outlineSubtle)
                     DetailInfoRow(label = "Дата и время") {
@@ -138,6 +174,30 @@ fun ExpenseDetailSheet(
                             text = sourceLabel,
                             style = MaterialTheme.typography.bodyMedium,
                             color = palette.textSecondary
+                        )
+                    }
+                }
+            }
+
+            if (expense.note.isNotBlank()) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    color = palette.surfaceElevated
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "Заметка",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = palette.textSecondary
+                        )
+                        Text(
+                            text = expense.note,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = palette.textPrimary
                         )
                     }
                 }

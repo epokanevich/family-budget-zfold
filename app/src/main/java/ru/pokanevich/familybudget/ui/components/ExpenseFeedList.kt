@@ -227,7 +227,8 @@ fun ExpensesFeedPane(
         periodExpenses.filter { exp ->
             val matchesQuery = q.isEmpty() ||
                 exp.merchant.lowercase().contains(q) ||
-                exp.category.displayName.lowercase().contains(q)
+                exp.category.displayName.lowercase().contains(q) ||
+                exp.note.lowercase().contains(q)
             val matchesFilter = when (activeFilter) {
                 FeedFilter.ALL -> true
                 FeedFilter.EXPENSES -> !exp.isIncome && !exp.isTransfer
@@ -475,6 +476,7 @@ private fun ExpenseTransactionRow(
     val isAnzhelika = expense.authorName.equals("Анжелика", ignoreCase = true)
     val authorColor = if (isAnzhelika) palette.anzhelikaColor else palette.eugeneColor
     val isIncome = expense.isIncome
+    val isTransfer = expense.isTransfer
 
     val sourceTag = when (expense.sourceType) {
         "PUSH_SBER" -> "Сбер"
@@ -511,6 +513,16 @@ private fun ExpenseTransactionRow(
                 overflow = TextOverflow.Ellipsis
             )
 
+            if (expense.note.isNotBlank()) {
+                Text(
+                    text = expense.note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = palette.textSecondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp)
@@ -532,14 +544,30 @@ private fun ExpenseTransactionRow(
                     style = MaterialTheme.typography.labelSmall,
                     color = palette.textMuted
                 )
-                Text(
-                    text = expense.category.displayName,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.textSecondary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
+                if (isTransfer) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(palette.surfaceElevated)
+                            .padding(horizontal = 6.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = "Перевод",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.textSecondary,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                } else {
+                    Text(
+                        text = expense.category.displayName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                }
                 if (sourceTag != null) {
                     Box(
                         modifier = Modifier
@@ -563,7 +591,11 @@ private fun ExpenseTransactionRow(
                 text = if (isIncome) "+$formatted" else formatted,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                color = if (isIncome) palette.accentEmerald else palette.textPrimary
+                color = when {
+                    isIncome -> palette.accentEmerald
+                    isTransfer -> palette.textSecondary
+                    else -> palette.textPrimary
+                }
             )
             Text(
                 text = Formatters.formatTimeOnly(expense.createdAtEpochMs),
@@ -603,7 +635,7 @@ private fun SearchInputPill(
             Box(modifier = Modifier.weight(1f)) {
                 if (query.isEmpty()) {
                     Text(
-                        text = "Поиск по магазину или категории...",
+                        text = "Поиск по магазину, категории или заметке...",
                         style = MaterialTheme.typography.bodyMedium,
                         color = palette.textMuted
                     )
