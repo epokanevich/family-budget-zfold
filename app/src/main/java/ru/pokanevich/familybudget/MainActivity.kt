@@ -103,6 +103,7 @@ import ru.pokanevich.familybudget.service.BankPushParser
 import ru.pokanevich.familybudget.ui.components.AiAnalyticsPane
 import ru.pokanevich.familybudget.ui.components.ExpensesFeedPane
 import ru.pokanevich.familybudget.ui.sheets.AddEditExpenseSheet
+import ru.pokanevich.familybudget.ui.sheets.CategoriesAndLimitsSheet
 import ru.pokanevich.familybudget.ui.sheets.ExpenseDetailSheet
 import ru.pokanevich.familybudget.ui.sheets.FamilySettingsSheet
 import ru.pokanevich.familybudget.ui.theme.AppThemeMode
@@ -210,6 +211,7 @@ fun FamilyBudgetApp(
     var inspectingExpense by remember { mutableStateOf<ExpenseEntity?>(null) }
     var showQrScanner by remember { mutableStateOf(false) }
     var showSettingsSheet by remember { mutableStateOf(false) }
+    var showCategoriesAndLimitsSheet by remember { mutableStateOf(false) }
     var prefilledAmount by remember { mutableStateOf("") }
     var prefilledMerchant by remember { mutableStateOf("") }
     var isImportingBackup by remember { mutableStateOf(false) }
@@ -766,6 +768,7 @@ fun FamilyBudgetApp(
             onSyncNow = {
                 scope.launch { repository.syncWithCloudNow() }
             },
+            onOpenCategoriesAndLimits = { showCategoriesAndLimitsSheet = true },
             onThemePreview = onThemeModeChange,
             onDismiss = { showSettingsSheet = false },
             onSave = { newName, newCode, newBudget, newAutoConfirm, newApiKey, newTheme ->
@@ -790,6 +793,17 @@ fun FamilyBudgetApp(
                 }
                 showSettingsSheet = false
             }
+        )
+    }
+
+    if (showCategoriesAndLimitsSheet) {
+        CategoriesAndLimitsSheet(
+            categoryRegistry = categoryRegistry,
+            monthlyBudgetRub = monthlyBudgetRub,
+            onSaveCategories = { updatedCategories ->
+                repository.updateCategories(updatedCategories)
+            },
+            onDismiss = { showCategoriesAndLimitsSheet = false }
         )
     }
 }

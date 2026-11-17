@@ -223,21 +223,60 @@ class BudgetRepository private constructor(context: Context) {
      * и ставит синхронизацию в очередь.
      */
     fun upsertCategory(descriptor: CategoryDescriptor) {
-        if (descriptor.id.isBlank()) return
-        synchronized(configLock) {
+        updateCategories(listOf(descriptor))
+    }
+
+    /**
+     * Пакетно обновляет или добавляет категории в семейном конфиге,
+     * повышая `updatedAtEpochMs` только у реально изменившихся категорий,
+     * и ставит синхронизацию в очередь.
+     */
+    fun updateCategories(descriptors: List<CategoryDescriptor>) {
+        if (descriptors.isEmpty()) return
+        val changed = synchronized(configLock) {
             val current = _familyConfig.value
-            val existing = current.categories.firstOrNull { it.id == descriptor.id }
-            val nextUpdatedAt = maxOf(
-                System.currentTimeMillis(),
-                (existing?.updatedAtEpochMs ?: 0L) + 1L,
-                descriptor.updatedAtEpochMs
-            )
-            val updatedDescriptor = descriptor.copy(updatedAtEpochMs = nextUpdatedAt)
-            val updatedList = (current.categories.filterNot { it.id == descriptor.id } + updatedDescriptor)
-                .sortedBy { it.id }
-            applyLocalConfigLocked(current.copy(categories = updatedList), hasUnsynced = true)
+            val currentRegistry = current.toRegistry()
+            val byId = current.categories.associateBy { it.id }.toMutableMap()
+            val maxExistingTs = current.categories.maxOfOrNull { it.updatedAtEpochMs } ?: 0L
+            val now = maxOf(System.currentTimeMillis(), maxExistingTs + 1L)
+            var anyChanged = false
+
+            for (descriptor in descriptors) {
+                if (descriptor.id.isBlank()) continue
+                val baseline = currentRegistry.find(descriptor.id)
+                val isDifferent = baseline == null ||
+                    baseline.displayName != descriptor.displayName ||
+                    baseline.shortName != descriptor.shortName ||
+                    baseline.emoji != descriptor.emoji ||
+                    baseline.colorHex != descriptor.colorHex ||
+                    baseline.isIncome != descriptor.isIncome ||
+                    baseline.limitMode != descriptor.limitMode ||
+                    abs(baseline.limitValue - descriptor.limitValue) > 0.0001 ||
+                    baseline.isArchived != descriptor.isArchived
+
+                if (isDifferent) {
+                    val nextUpdatedAt = maxOf(
+                        now,
+                        (baseline?.updatedAtEpochMs ?: 0L) + 1L,
+                        descriptor.updatedAtEpochMs
+                    )
+                    byId[descriptor.id] = descriptor.copy(
+                        isBuiltIn = baseline?.isBuiltIn ?: descriptor.isBuiltIn,
+                        updatedAtEpochMs = nextUpdatedAt
+                    )
+                    anyChanged = true
+                }
+            }
+
+            if (anyChanged) {
+                val updatedList = byId.values.sortedBy { it.id }
+                applyLocalConfigLocked(current.copy(categories = updatedList), hasUnsynced = true)
+            }
+            anyChanged
         }
-        requestCoalescedSync()
+        if (changed) {
+            requestCoalescedSync()
+        }
     }
 
     private sealed interface GithubFileFetchResult {

@@ -31,8 +31,8 @@ android {
         applicationId = "ru.pokanevich.familybudget"
         minSdk = 26
         targetSdk = 34
-        versionCode = 17
-        versionName = "3.4.1"
+        versionCode = 18
+        versionName = "3.4.2"
 
         val syncToken = escapeForBuildConfig(System.getenv("SYNC_GITHUB_TOKEN"))
         val geminiApiKey = escapeForBuildConfig(System.getenv("GEMINI_API_KEY"))

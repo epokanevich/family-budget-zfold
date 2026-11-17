@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Sync
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Button
@@ -86,6 +87,7 @@ fun FamilySettingsSheet(
     onSimulateTestPush: () -> Unit,
     onImportBackupUri: (Uri) -> Unit,
     onSyncNow: () -> Unit,
+    onOpenCategoriesAndLimits: () -> Unit,
     onThemePreview: (AppThemeMode) -> Unit,
     onDismiss: () -> Unit,
     onSave: (String, String, Double, Boolean, String, AppThemeMode) -> Unit
@@ -202,6 +204,26 @@ fun FamilySettingsSheet(
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                OutlinedButton(
+                    onClick = onOpenCategoriesAndLimits,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, palette.accentEmerald),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Tune,
+                        contentDescription = null,
+                        tint = palette.accentEmerald,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Категории и ориентиры расходов",
+                        color = palette.accentEmerald,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
 
             // Section 2: Theme
