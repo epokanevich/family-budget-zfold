@@ -1,8 +1,11 @@
 # Keep data models for Firestore & local serialization
 -keep class ru.pokanevich.familybudget.data.** { *; }
 
+# NotificationListenerService для автоучёта пушей Сбера и Mir Pay (биндится системой по имени из манифеста)
+-keep class ru.pokanevich.familybudget.service.BankPushListenerService { *; }
+
 # Room
--keep class * extends androidx.room.RoomDatabase
+-keep class * extends androidx.room.RoomDatabase { <init>(); }
 -keep @androidx.room.Entity class *
 -dontwarn androidx.room.paging.**
 

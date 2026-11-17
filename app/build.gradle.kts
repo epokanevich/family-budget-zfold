@@ -4,6 +4,25 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+/**
+ * Экранирует секрет для вставки в строковый литерал BuildConfig (генерируется как Java):
+ * убирает переводы строк, экранирует `\` и `"`, а `$` заменяет на unicode-escape `\u0024`
+ * (Java не допускает escape `\$` и упадёт с "illegal escape character",
+ * а `\u0024` одинаково безопасен и для Java, и для Kotlin-шаблонов).
+ */
+fun escapeForBuildConfig(raw: String?): String = (raw ?: "")
+    .replace("\r", "")
+    .replace("\n", "")
+    .trim()
+    .replace("\\", "\\\\")
+    .replace("\"", "\\\"")
+    .replace("\$", "\\u0024")
+
+ksp {
+    // Экспорт схемы Room для будущих Migration (без fallbackToDestructiveMigration)
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 android {
     namespace = "ru.pokanevich.familybudget"
     compileSdk = 34
@@ -12,15 +31,11 @@ android {
         applicationId = "ru.pokanevich.familybudget"
         minSdk = 26
         targetSdk = 34
-        versionCode = 10
-        versionName = "3.2.4"
+        versionCode = 11
+        versionName = "3.2.5"
 
-        val syncToken = (System.getenv("SYNC_GITHUB_TOKEN") ?: "")
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-        val geminiApiKey = (System.getenv("GEMINI_API_KEY") ?: "")
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
+        val syncToken = escapeForBuildConfig(System.getenv("SYNC_GITHUB_TOKEN"))
+        val geminiApiKey = escapeForBuildConfig(System.getenv("GEMINI_API_KEY"))
         buildConfigField("String", "DEFAULT_SYNC_TOKEN", "\"$syncToken\"")
         buildConfigField("String", "DEFAULT_GEMINI_API_KEY", "\"$geminiApiKey\"")
 
@@ -31,12 +46,28 @@ android {
 
     signingConfigs {
         create("release") {
-            val keystorePath = System.getenv("KEYSTORE_PATH")
-            if (!keystorePath.isNullOrBlank() && file(keystorePath).exists()) {
-                storeFile = file(keystorePath)
-                storePassword = System.getenv("KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("KEY_ALIAS")
-                keyPassword = System.getenv("KEY_PASSWORD")
+            // Release-подпись активируется только при полном и непустом наборе из 4 переменных,
+            // иначе сборка безопасно откатывается на debug-подпись (без падения на полупустых секретах).
+            val keystorePath = System.getenv("KEYSTORE_PATH")?.trim().orEmpty()
+            val keystorePassword = System.getenv("KEYSTORE_PASSWORD").orEmpty()
+            val releaseKeyAlias = System.getenv("KEY_ALIAS")?.trim().orEmpty()
+            val releaseKeyPassword = System.getenv("KEY_PASSWORD").orEmpty()
+            val keystoreFile = keystorePath.takeIf { it.isNotBlank() }?.let { file(it) }
+            val isReleaseSigningComplete = keystoreFile != null &&
+                keystoreFile.isFile &&
+                keystoreFile.length() > 0L &&
+                keystorePassword.isNotBlank() &&
+                releaseKeyAlias.isNotBlank() &&
+                releaseKeyPassword.isNotBlank()
+            if (isReleaseSigningComplete) {
+                storeFile = keystoreFile
+                storePassword = keystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            } else if (keystorePath.isNotBlank() || keystorePassword.isNotBlank() ||
+                releaseKeyAlias.isNotBlank() || releaseKeyPassword.isNotBlank()
+            ) {
+                logger.warn("Release signing config is incomplete (need KEYSTORE_PATH file, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD) - falling back to debug signing")
             }
         }
     }

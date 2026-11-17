@@ -2,6 +2,8 @@ package ru.pokanevich.familybudget
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.pokanevich.familybudget.data.BudgetRepository
@@ -9,31 +11,34 @@ import ru.pokanevich.familybudget.data.ExpenseEntity
 
 class CrossDevicePushDedupTest {
 
+    private val baseTime = 1_700_000_000_000L
+
+    private fun push(
+        id: String,
+        amount: Double,
+        source: String,
+        merchant: String = "",
+        offsetMs: Long = 0L,
+        pending: Boolean = true,
+        synced: Boolean = true,
+        author: String = "Евгений"
+    ) = ExpenseEntity(
+        id = id,
+        amountRub = amount,
+        merchant = merchant,
+        authorName = author,
+        sourceType = source,
+        isPendingConfirmation = pending,
+        isSynced = synced,
+        createdAtEpochMs = baseTime + offsetMs,
+        updatedAtEpochMs = baseTime + offsetMs,
+        dedupSignature = BudgetRepository.buildAmountSignature(amount)
+    )
+
     @Test
     fun `mirpay and sber pushes within 90s keep mirpay and soft-delete sber`() {
-        val baseTime = 1_700_000_000_000L
-        val mirPay = ExpenseEntity(
-            id = "mirpay-1",
-            amountRub = 540.0,
-            merchant = "Пятёрочка",
-            authorName = "Анжелика",
-            sourceType = "PUSH_MIRPAY",
-            isPendingConfirmation = true,
-            createdAtEpochMs = baseTime,
-            updatedAtEpochMs = baseTime,
-            dedupSignature = "AMT_540.00"
-        )
-        val sber = ExpenseEntity(
-            id = "sber-1",
-            amountRub = 540.0,
-            merchant = "PYATEROCHKA",
-            authorName = "Евгений",
-            sourceType = "PUSH_SBER",
-            isPendingConfirmation = true,
-            createdAtEpochMs = baseTime + 4_000L,
-            updatedAtEpochMs = baseTime + 4_000L,
-            dedupSignature = "AMT_540.00"
-        )
+        val mirPay = push("mirpay-1", 540.0, "PUSH_MIRPAY", merchant = "Пятёрочка", author = "Анжелика")
+        val sber = push("sber-1", 540.0, "PUSH_SBER", merchant = "PYATEROCHKA", offsetMs = 4_000L)
         val map = mutableMapOf(mirPay.id to mirPay, sber.id to sber)
 
         val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 10_000L)
@@ -45,26 +50,62 @@ class CrossDevicePushDedupTest {
     }
 
     @Test
+    fun `dedup losers are not marked synced before successful PUT`() {
+        val mirPay = push("mirpay-s", 540.0, "PUSH_MIRPAY", merchant = "Пятёрочка")
+        val sber = push("sber-s", 540.0, "PUSH_SBER", merchant = "PYATEROCHKA", offsetMs = 3_000L)
+        val map = mutableMapOf(mirPay.id to mirPay, sber.id to sber)
+
+        val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 10_000L)
+
+        assertEquals(1, losers.size)
+        assertTrue(losers.first().isDeleted)
+        assertFalse("loser must stay isSynced=false until PUT 2xx", losers.first().isSynced)
+    }
+
+    @Test
+    fun `transliterated merchants with bank suffixes are deduplicated`() {
+        val mirPay = push("mirpay-t", 1650.0, "PUSH_MIRPAY", merchant = "Пятёрочка")
+        val sber = push("sber-t", 1650.0, "PUSH_SBER", merchant = "PYATEROCHKA 2154 MOSCOW RUS", offsetMs = 6_000L)
+        val map = mutableMapOf(mirPay.id to mirPay, sber.id to sber)
+
+        val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 10_000L)
+
+        assertEquals(listOf("sber-t"), losers.map { it.id })
+        assertFalse(map.getValue("mirpay-t").isDeleted)
+    }
+
+    @Test
+    fun `same amount in different stores on both phones is not deduplicated`() {
+        // 50 ₽ проезд у Евгения (Сбер) и 50 ₽ вода у Анжелики (Mir Pay) почти одновременно
+        val transport = push("sber-transport", 50.0, "PUSH_SBER", merchant = "MOSGORTRANS")
+        val water = push(
+            "mirpay-water", 50.0, "PUSH_MIRPAY", merchant = "Вода Родник",
+            offsetMs = 15_000L, author = "Анжелика"
+        )
+        val map = mutableMapOf(transport.id to transport, water.id to water)
+
+        val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 20_000L)
+
+        assertTrue(losers.isEmpty())
+        assertFalse(map.getValue("sber-transport").isDeleted)
+        assertFalse(map.getValue("mirpay-water").isDeleted)
+    }
+
+    @Test
+    fun `generic mirpay merchant falls back to amount and time match`() {
+        val mirPay = push("mirpay-g", 777.0, "PUSH_MIRPAY", merchant = "Оплата через Mir Pay")
+        val sber = push("sber-g", 777.0, "PUSH_SBER", merchant = "MAGNIT MM", offsetMs = 2_000L)
+        val map = mutableMapOf(mirPay.id to mirPay, sber.id to sber)
+
+        val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 10_000L)
+
+        assertEquals(listOf("sber-g"), losers.map { it.id })
+    }
+
+    @Test
     fun `confirmed sber wins over pending mirpay within 90s`() {
-        val baseTime = 1_700_000_000_000L
-        val mirPayPending = ExpenseEntity(
-            id = "mirpay-2",
-            amountRub = 1200.0,
-            sourceType = "PUSH_MIRPAY",
-            isPendingConfirmation = true,
-            createdAtEpochMs = baseTime,
-            updatedAtEpochMs = baseTime,
-            dedupSignature = "AMT_1200.00"
-        )
-        val sberConfirmed = ExpenseEntity(
-            id = "sber-2",
-            amountRub = 1200.0,
-            sourceType = "PUSH_SBER",
-            isPendingConfirmation = false,
-            createdAtEpochMs = baseTime + 5_000L,
-            updatedAtEpochMs = baseTime + 5_000L,
-            dedupSignature = "AMT_1200.00"
-        )
+        val mirPayPending = push("mirpay-2", 1200.0, "PUSH_MIRPAY", pending = true)
+        val sberConfirmed = push("sber-2", 1200.0, "PUSH_SBER", offsetMs = 5_000L, pending = false)
         val map = mutableMapOf(mirPayPending.id to mirPayPending, sberConfirmed.id to sberConfirmed)
 
         val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 10_000L)
@@ -77,23 +118,8 @@ class CrossDevicePushDedupTest {
 
     @Test
     fun `same source type within 90s is not deduplicated across devices`() {
-        val baseTime = 1_700_000_000_000L
-        val sber1 = ExpenseEntity(
-            id = "sber-a",
-            amountRub = 55.0,
-            sourceType = "PUSH_SBER",
-            createdAtEpochMs = baseTime,
-            updatedAtEpochMs = baseTime,
-            dedupSignature = "AMT_55.00"
-        )
-        val sber2 = ExpenseEntity(
-            id = "sber-b",
-            amountRub = 55.0,
-            sourceType = "PUSH_SBER",
-            createdAtEpochMs = baseTime + 20_000L,
-            updatedAtEpochMs = baseTime + 20_000L,
-            dedupSignature = "AMT_55.00"
-        )
+        val sber1 = push("sber-a", 55.0, "PUSH_SBER")
+        val sber2 = push("sber-b", 55.0, "PUSH_SBER", offsetMs = 20_000L)
         val map = mutableMapOf(sber1.id to sber1, sber2.id to sber2)
 
         val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 30_000L)
@@ -105,23 +131,8 @@ class CrossDevicePushDedupTest {
 
     @Test
     fun `mirpay and sber pushes more than 90s apart are both kept`() {
-        val baseTime = 1_700_000_000_000L
-        val mirPay = ExpenseEntity(
-            id = "mirpay-old",
-            amountRub = 300.0,
-            sourceType = "PUSH_MIRPAY",
-            createdAtEpochMs = baseTime,
-            updatedAtEpochMs = baseTime,
-            dedupSignature = "AMT_300.00"
-        )
-        val sber = ExpenseEntity(
-            id = "sber-new",
-            amountRub = 300.0,
-            sourceType = "PUSH_SBER",
-            createdAtEpochMs = baseTime + 95_000L,
-            updatedAtEpochMs = baseTime + 95_000L,
-            dedupSignature = "AMT_300.00"
-        )
+        val mirPay = push("mirpay-old", 300.0, "PUSH_MIRPAY")
+        val sber = push("sber-new", 300.0, "PUSH_SBER", offsetMs = 95_000L)
         val map = mutableMapOf(mirPay.id to mirPay, sber.id to sber)
 
         val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 100_000L)
@@ -129,5 +140,103 @@ class CrossDevicePushDedupTest {
         assertTrue(losers.isEmpty())
         assertFalse(map.getValue("mirpay-old").isDeleted)
         assertFalse(map.getValue("sber-new").isDeleted)
+    }
+
+    // ---------- Полный цикл синка: неудачный PUT не приводит к повторному удалению ----------
+
+    /** Минимальная in-memory модель таблицы expenses (upsert + markSyncedIfUnchanged). */
+    private class FakeLocalDb(initial: List<ExpenseEntity>) {
+        val rows = initial.associateBy { it.id }.toMutableMap()
+        fun all() = rows.values.toList()
+        fun unsynced() = rows.values.filter { !it.isSynced }
+        fun upsertAll(items: List<ExpenseEntity>) = items.forEach { rows[it.id] = it }
+        fun markSyncedIfUnchanged(versions: Map<String, Long>) {
+            for ((id, updatedAt) in versions) {
+                val row = rows[id] ?: continue
+                if (!row.isSynced && row.updatedAtEpochMs == updatedAt) rows[id] = row.copy(isSynced = true)
+            }
+        }
+    }
+
+    @Test
+    fun `failed PUT keeps loser unsynced and does not delete again on retry`() {
+        // Локально: свой Mir Pay (уже в облаке). В облаке: Сбер с другого телефона на ту же покупку.
+        val mirPay = push("mirpay-p", 540.0, "PUSH_MIRPAY", merchant = "Пятёрочка", synced = true)
+        val sberRemote = push("sber-p", 540.0, "PUSH_SBER", merchant = "PYATEROCHKA", offsetMs = 5_000L)
+        val remote = mapOf(mirPay.id to mirPay, sberRemote.id to sberRemote)
+        val local = FakeLocalDb(listOf(mirPay))
+
+        // Цикл 1: дедуп помечает Сбер удалённым, но PUT падает (сеть / 5xx)
+        val plan1 = BudgetRepository.buildSyncMergePlan(local.all(), remote, remoteExists = true, nowMs = baseTime + 60_000L)
+        assertEquals(listOf("sber-p"), plan1.dedupedLosers.map { it.id })
+        assertTrue(plan1.needCloudPush)
+        assertTrue(plan1.mergedMap.getValue("sber-p").isDeleted)
+        local.upsertAll(plan1.toUpsertLocally)
+        // PUT failed -> markSyncedIfUnchanged НЕ вызывается
+
+        val savedLoser = local.rows.getValue("sber-p")
+        assertTrue(savedLoser.isDeleted)
+        assertFalse("loser must remain unsynced after failed PUT", savedLoser.isSynced)
+        assertTrue(
+            "304 fast-path must not skip the pending deletion",
+            local.unsynced().any { it.id == "sber-p" }
+        )
+
+        // Цикл 2 (облако не менялось): удаление повторно отправляется, но не создаётся заново
+        val plan2 = BudgetRepository.buildSyncMergePlan(local.all(), remote, remoteExists = true, nowMs = baseTime + 120_000L)
+        assertTrue("no repeated deletion", plan2.dedupedLosers.isEmpty())
+        assertTrue(plan2.needCloudPush)
+        assertTrue(plan2.mergedMap.getValue("sber-p").isDeleted)
+        assertFalse(plan2.mergedMap.getValue("mirpay-p").isDeleted)
+        assertEquals(savedLoser.updatedAtEpochMs, plan2.mergedMap.getValue("sber-p").updatedAtEpochMs)
+        assertEquals(savedLoser.updatedAtEpochMs, plan2.pushedVersions["sber-p"])
+
+        // PUT 2xx -> только теперь переводим в isSynced = true
+        local.upsertAll(plan2.toUpsertLocally)
+        local.markSyncedIfUnchanged(plan2.pushedVersions)
+        assertTrue(local.unsynced().isEmpty())
+
+        // Цикл 3: облако уже содержит удаление — пушить больше нечего
+        val remoteAfterPut = plan2.mergedMap
+        val plan3 = BudgetRepository.buildSyncMergePlan(local.all(), remoteAfterPut, remoteExists = true, nowMs = baseTime + 180_000L)
+        assertFalse(plan3.needCloudPush)
+        assertTrue(plan3.dedupedLosers.isEmpty())
+    }
+
+    @Test
+    fun `local edit made during PUT is not marked synced`() {
+        val manual = ExpenseEntity(
+            id = "manual-1",
+            amountRub = 100.0,
+            isSynced = false,
+            createdAtEpochMs = baseTime,
+            updatedAtEpochMs = baseTime
+        )
+        val local = FakeLocalDb(listOf(manual))
+        val plan = BudgetRepository.buildSyncMergePlan(local.all(), emptyMap(), remoteExists = true, nowMs = baseTime + 1_000L)
+        assertTrue(plan.needCloudPush)
+        assertEquals(baseTime, plan.pushedVersions["manual-1"])
+        assertFalse(plan.mergedMap.isEmpty())
+
+        // Пользователь отредактировал запись, пока шёл PUT
+        local.upsertAll(listOf(manual.copy(amountRub = 150.0, updatedAtEpochMs = baseTime + 2_000L)))
+        local.markSyncedIfUnchanged(plan.pushedVersions)
+
+        val row = local.rows.getValue("manual-1")
+        assertFalse(row.isSynced)
+        assertEquals(150.0, row.amountRub, 0.0)
+    }
+
+    @Test
+    fun `remote newer record overwrites local and is stored as synced`() {
+        val localOld = ExpenseEntity(id = "x", amountRub = 10.0, isSynced = true, createdAtEpochMs = baseTime, updatedAtEpochMs = baseTime)
+        val remoteNew = localOld.copy(amountRub = 20.0, updatedAtEpochMs = baseTime + 5_000L)
+        val plan = BudgetRepository.buildSyncMergePlan(listOf(localOld), mapOf("x" to remoteNew), remoteExists = true)
+        assertFalse(plan.needCloudPush)
+        val upsert = plan.toUpsertLocally.single()
+        assertTrue(upsert.isSynced)
+        assertEquals(20.0, upsert.amountRub, 0.0)
+        assertNull(plan.pushedVersions["x"])
+        assertNotNull(plan.mergedMap["x"])
     }
 }

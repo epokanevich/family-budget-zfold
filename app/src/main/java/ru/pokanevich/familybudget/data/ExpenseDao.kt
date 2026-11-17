@@ -21,11 +21,29 @@ interface ExpenseDao {
     @Query("SELECT * FROM expenses WHERE isSynced = 0")
     suspend fun getUnsyncedExpenses(): List<ExpenseEntity>
 
+    @Query("SELECT COUNT(*) FROM expenses WHERE isSynced = 1")
+    suspend fun countSyncedExpenses(): Int
+
+    /**
+     * Атомарно помечает запись синхронизированной, только если она не менялась локально
+     * с момента отправки в облако (иначе свежая правка останется isSynced = 0 и уйдёт следующим циклом).
+     */
+    @Query("UPDATE expenses SET isSynced = 1 WHERE id = :id AND updatedAtEpochMs = :updatedAtEpochMs AND isSynced = 0")
+    suspend fun markSyncedIfUnchanged(id: String, updatedAtEpochMs: Long): Int
+
     @Query("SELECT * FROM expenses WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): ExpenseEntity?
 
-    @Query("SELECT * FROM expenses WHERE dedupSignature = :signature AND createdAtEpochMs > :minTimestampMs LIMIT 1")
-    suspend fun findRecentDuplicate(signature: String, minTimestampMs: Long): ExpenseEntity?
+    /**
+     * Кандидаты в дубли пуша на этом устройстве: та же сумма (dedupSignature = AMT_...) в окне времени.
+     * Окончательное решение (sourceType, нормализованный мерчант, текст пуша) принимает
+     * [BudgetRepository.findSameDeviceDuplicate], т.к. транслитерацию мерчанта нельзя выразить в SQL.
+     */
+    @Query(
+        "SELECT * FROM expenses WHERE dedupSignature = :signature AND createdAtEpochMs > :minTimestampMs " +
+            "AND isDeleted = 0 ORDER BY createdAtEpochMs DESC"
+    )
+    suspend fun findRecentDuplicateCandidates(signature: String, minTimestampMs: Long): List<ExpenseEntity>
 
     /**
      * Слияние по правилу Last-Write-Wins для одного UUID:

@@ -5,7 +5,12 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [ExpenseEntity::class], version = 1, exportSchema = false)
+/**
+ * Локальная БД (offline-first). ВАЖНО: destructive migration запрещена —
+ * при любом изменении схемы поднимайте version и добавляйте Migration
+ * (схемы экспортируются в app/schemas и коммитятся в репозиторий).
+ */
+@Database(entities = [ExpenseEntity::class], version = 1, exportSchema = true)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun expenseDao(): ExpenseDao
 
@@ -20,7 +25,6 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "family_budget_zfold.db"
                 )
-                    .fallbackToDestructiveMigration()
                     .build()
                     .also { INSTANCE = it }
             }

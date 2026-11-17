@@ -687,7 +687,7 @@ fun FamilyBudgetApp(
                 familySpaceCode = newCode
                 monthlyBudgetRub = newBudget
                 autoConfirmPush = newAutoConfirm
-                geminiApiKey = newApiKey
+                geminiApiKey = repository.prefs.geminiApiKey
                 onThemeModeChange(newTheme)
 
                 repository.startRealtimeSync()
