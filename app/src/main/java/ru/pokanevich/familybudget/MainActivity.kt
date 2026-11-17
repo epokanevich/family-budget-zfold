@@ -141,7 +141,10 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        handleIntentExtras(intent)
+        // При восстановлении после смерти процесса не открываем шторку повторно
+        if (savedInstanceState == null) {
+            handleIntentExtras(intent)
+        }
         val repository = BudgetRepository.getInstance(applicationContext)
         val pinManager = PinSecurityManager.getInstance(applicationContext)
         pinManager.attachToProcessLifecycle(ProcessLifecycleOwner.get().lifecycle)

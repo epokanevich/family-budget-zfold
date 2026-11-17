@@ -119,6 +119,8 @@ class BudgetRepository private constructor(context: Context) {
         scope.launch {
             reconcileAndProcessRecurringOnStartup()
             reconcileSavingsGoalsOnStartup()
+            // Авто-созданные регулярные платежи и зеркалирование конфига могли изменить базу
+            BudgetWidgetProvider.requestUpdate(appContext)
         }
         startRealtimeSync()
     }

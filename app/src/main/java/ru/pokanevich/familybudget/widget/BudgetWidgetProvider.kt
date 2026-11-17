@@ -104,7 +104,8 @@ class BudgetWidgetProvider : AppWidgetProvider() {
                 registry = config.toRegistry(),
                 recurringPayments = recurring,
                 savingsGoals = goals,
-                hideAmountsOnWidget = prefs.hideAmountsOnWidget
+                // Флаг приватности действует только при включённой защите PIN-кодом
+                hideAmountsOnWidget = prefs.isAppLockEnabled && prefs.hideAmountsOnWidget
             )
 
             for (appWidgetId in appWidgetIds) {
@@ -123,8 +124,21 @@ class BudgetWidgetProvider : AppWidgetProvider() {
             val minHeightDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, 60)
             val isWide = minWidthDp >= 220
             val isTall = minHeightDp >= 110
+            val isShort = minHeightDp < 72
 
             val views = RemoteViews(context.packageName, R.layout.widget_budget)
+
+            // Низкая ячейка 2x1 / 4x1 (Cover Screen Z Fold): уменьшаем вертикальные отступы, чтобы не обрезать текст
+            val density = context.resources.displayMetrics.density
+            val horizontalPaddingPx = (12 * density).toInt()
+            val verticalPaddingPx = ((if (isShort) 4 else 12) * density).toInt()
+            views.setViewPadding(
+                R.id.widget_root,
+                horizontalPaddingPx,
+                verticalPaddingPx,
+                horizontalPaddingPx,
+                verticalPaddingPx
+            )
 
             views.setViewVisibility(R.id.widget_header_row, if (isTall) View.VISIBLE else View.GONE)
             views.setViewVisibility(R.id.widget_daily_label, if (isWide || isTall) View.VISIBLE else View.GONE)
