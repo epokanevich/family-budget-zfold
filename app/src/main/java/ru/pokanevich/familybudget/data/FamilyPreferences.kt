@@ -2,6 +2,7 @@ package ru.pokanevich.familybudget.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import ru.pokanevich.familybudget.BuildConfig
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -26,26 +27,18 @@ class FamilyPreferences(context: Context) {
         get() = prefs.getBoolean("auto_confirm_push", false)
         set(value) = prefs.edit().putBoolean("auto_confirm_push", value).apply()
 
-    // Вшитый по умолчанию ключ Gemini API (при желании можно переопределить в Настройках)
-    private val defaultGeminiApiKey: String
-        get() = listOf("AQ.Ab8RN6Ia794akDC7S", "ilK4jrKbjQBeoL0n66", "TRtwG-3Q89TL-Ow").joinToString("")
-
     var geminiApiKey: String
-        get() = prefs.getString("gemini_api_key", defaultGeminiApiKey)
-            ?.ifBlank { defaultGeminiApiKey } ?: defaultGeminiApiKey
+        get() = prefs.getString("gemini_api_key", BuildConfig.DEFAULT_GEMINI_API_KEY)
+            ?.ifBlank { BuildConfig.DEFAULT_GEMINI_API_KEY } ?: BuildConfig.DEFAULT_GEMINI_API_KEY
         set(value) = prefs.edit().putString("gemini_api_key", value.trim()).apply()
 
     var themeMode: String
         get() = prefs.getString("theme_mode", "SYSTEM") ?: "SYSTEM"
         set(value) = prefs.edit().putString("theme_mode", value).apply()
 
-    // Преднастроенный токен синхронизации с приватным репозиторием epokanevich/family-budget-sync-db
-    private val defaultSyncToken: String
-        get() = listOf("ghp_", "8ssbo33nFiMmOd", "UVvJyAsl7DIk3b3r4HYCSQ").joinToString("")
-
     var githubSyncToken: String
-        get() = prefs.getString("github_sync_token", defaultSyncToken)
-            ?.ifBlank { defaultSyncToken } ?: defaultSyncToken
+        get() = prefs.getString("github_sync_token", BuildConfig.DEFAULT_SYNC_TOKEN)
+            ?.ifBlank { BuildConfig.DEFAULT_SYNC_TOKEN } ?: BuildConfig.DEFAULT_SYNC_TOKEN
         set(value) = prefs.edit().putString("github_sync_token", value.trim()).apply()
 
     val pushDebugLog: String

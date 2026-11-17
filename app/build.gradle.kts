@@ -12,8 +12,17 @@ android {
         applicationId = "ru.pokanevich.familybudget"
         minSdk = 26
         targetSdk = 34
-        versionCode = 6
-        versionName = "3.2.0"
+        versionCode = 7
+        versionName = "3.2.1"
+
+        val syncToken = (System.getenv("SYNC_GITHUB_TOKEN") ?: "")
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        val geminiApiKey = (System.getenv("GEMINI_API_KEY") ?: "")
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        buildConfigField("String", "DEFAULT_SYNC_TOKEN", "\"$syncToken\"")
+        buildConfigField("String", "DEFAULT_GEMINI_API_KEY", "\"$geminiApiKey\"")
 
         vectorDrawables {
             useSupportLibrary = true
@@ -43,6 +52,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.11"
