@@ -118,13 +118,30 @@ import ru.pokanevich.familybudget.ui.theme.FamilyBudgetTheme
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
 import ru.pokanevich.familybudget.ui.util.BudgetPeriod
 import ru.pokanevich.familybudget.ui.util.PeriodCalculator
+import ru.pokanevich.familybudget.widget.BudgetWidgetProvider
 
 class MainActivity : FragmentActivity() {
+
+    private var pendingOpenAddSheet by mutableStateOf(false)
+
+    private fun handleIntentExtras(intent: Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_OPEN_ADD_SHEET, false) == true) {
+            pendingOpenAddSheet = true
+            intent.removeExtra(EXTRA_OPEN_ADD_SHEET)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIntentExtras(intent)
+    }
 
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleIntentExtras(intent)
         val repository = BudgetRepository.getInstance(applicationContext)
         val pinManager = PinSecurityManager.getInstance(applicationContext)
         pinManager.attachToProcessLifecycle(ProcessLifecycleOwner.get().lifecycle)
@@ -246,12 +263,18 @@ class MainActivity : FragmentActivity() {
                             selectedPeriod = selectedPeriod,
                             onSelectedPeriodChange = { selectedPeriodName = it.name },
                             anchorEpochMs = anchorEpochMs,
-                            onAnchorEpochMsChange = { anchorEpochMs = it }
+                            onAnchorEpochMsChange = { anchorEpochMs = it },
+                            openAddSheetTrigger = pendingOpenAddSheet,
+                            onAddSheetTriggerConsumed = { pendingOpenAddSheet = false }
                         )
                     }
                 }
             }
         }
+    }
+
+    companion object {
+        const val EXTRA_OPEN_ADD_SHEET = "extra_open_add_sheet"
     }
 }
 
@@ -270,7 +293,9 @@ fun FamilyBudgetApp(
     selectedPeriod: BudgetPeriod,
     onSelectedPeriodChange: (BudgetPeriod) -> Unit,
     anchorEpochMs: Long,
-    onAnchorEpochMsChange: (Long) -> Unit
+    onAnchorEpochMsChange: (Long) -> Unit,
+    openAddSheetTrigger: Boolean = false,
+    onAddSheetTriggerConsumed: () -> Unit = {}
 ) {
     val palette = LocalFamilyPalette.current
     val context = LocalContext.current
@@ -295,6 +320,7 @@ fun FamilyBudgetApp(
     var autoConfirmPush by remember { mutableStateOf(repository.prefs.autoConfirmBankPush) }
     var enabledBankSources by remember { mutableStateOf(repository.prefs.enabledBankPushSources) }
     var geminiApiKey by remember { mutableStateOf(repository.prefs.geminiApiKey) }
+    var hideAmountsOnWidget by remember { mutableStateOf(repository.prefs.hideAmountsOnWidget) }
 
     val periodWindow = remember(selectedPeriod, anchorEpochMs) {
         PeriodCalculator.buildWindow(selectedPeriod, anchorEpochMs)
@@ -311,6 +337,16 @@ fun FamilyBudgetApp(
     var showSavingsGoalsSheet by remember { mutableStateOf(false) }
     var prefilledAmount by remember { mutableStateOf("") }
     var prefilledMerchant by remember { mutableStateOf("") }
+
+    LaunchedEffect(openAddSheetTrigger) {
+        if (openAddSheetTrigger) {
+            editingExpense = null
+            prefilledAmount = ""
+            prefilledMerchant = ""
+            showAddEditSheet = true
+            onAddSheetTriggerConsumed()
+        }
+    }
     var isImportingBackup by remember { mutableStateOf(false) }
     var importStatusMessage by remember { mutableStateOf<String?>(null) }
     var pendingCsvBytesToExport by remember { mutableStateOf<ByteArray?>(null) }
@@ -820,6 +856,7 @@ fun FamilyBudgetApp(
             importStatusMessage = importStatusMessage,
             isAppLockEnabled = isAppLockEnabled,
             isBiometricEnabled = isBiometricEnabled,
+            hideAmountsOnWidget = hideAmountsOnWidget,
             autoLockTimeoutMs = autoLockTimeoutMs,
             onVerifyCurrentPin = { pin -> pinManager.verifyPin(pin) },
             onSetOrChangePin = { newPin ->
@@ -834,6 +871,8 @@ fun FamilyBudgetApp(
             },
             onDisableAppLock = {
                 pinManager.disableAppLock()
+                hideAmountsOnWidget = false
+                BudgetWidgetProvider.requestUpdate(context)
                 scope.launch {
                     snackbarHostState.showSnackbar(
                         message = "Защита PIN-кодом отключена",
@@ -842,6 +881,11 @@ fun FamilyBudgetApp(
                 }
             },
             onToggleBiometric = { enabled -> pinManager.setBiometricEnabled(enabled) },
+            onToggleHideAmountsOnWidget = { enabled ->
+                hideAmountsOnWidget = enabled
+                repository.prefs.hideAmountsOnWidget = enabled
+                BudgetWidgetProvider.requestUpdate(context)
+            },
             onChangeAutoLockTimeout = { timeoutMs -> pinManager.setAutoLockTimeoutMs(timeoutMs) },
             onExportCsvCurrentPeriod = {
                 val periodExpenses = confirmedExpenses.filter {

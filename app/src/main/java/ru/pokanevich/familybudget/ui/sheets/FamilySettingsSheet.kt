@@ -101,11 +101,13 @@ fun FamilySettingsSheet(
     importStatusMessage: String?,
     isAppLockEnabled: Boolean,
     isBiometricEnabled: Boolean,
+    hideAmountsOnWidget: Boolean,
     autoLockTimeoutMs: Long,
     onVerifyCurrentPin: (String) -> Boolean,
     onSetOrChangePin: (String) -> Unit,
     onDisableAppLock: () -> Unit,
     onToggleBiometric: (Boolean) -> Unit,
+    onToggleHideAmountsOnWidget: (Boolean) -> Unit,
     onChangeAutoLockTimeout: (Long) -> Unit,
     onExportCsvCurrentPeriod: () -> Unit,
     onExportCsvAllTime: () -> Unit,
@@ -434,6 +436,37 @@ fun FamilySettingsSheet(
                                     onToggleBiometric(enabled)
                                 }
                             },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = palette.accentEmerald
+                            )
+                        )
+                    }
+
+                    HorizontalDivider(thickness = 0.6.dp, color = palette.outlineSubtle)
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Скрывать суммы на виджете",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = palette.textPrimary
+                            )
+                            Text(
+                                text = "Показывать «•••• ₽» вместо чисел на рабочем столе",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = palette.textMuted
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Switch(
+                            checked = hideAmountsOnWidget,
+                            onCheckedChange = onToggleHideAmountsOnWidget,
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = Color.White,
                                 checkedTrackColor = palette.accentEmerald

@@ -21,6 +21,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
+import ru.pokanevich.familybudget.widget.BudgetWidgetProvider
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
@@ -62,6 +63,7 @@ internal data class ConfigSyncMergePlan(
 
 class BudgetRepository private constructor(context: Context) {
 
+    private val appContext = context.applicationContext
     private val db = AppDatabase.getInstance(context)
     private val dao = db.expenseDao()
     private val recurringDao = db.recurringPaymentDao()
@@ -190,7 +192,12 @@ class BudgetRepository private constructor(context: Context) {
             _isSyncing.value = true
             try {
                 runCatching { performSyncCycle() }
-                    .onSuccess { state -> _syncState.value = state }
+                    .onSuccess { state ->
+                        _syncState.value = state
+                        if (state == SyncState.CLOUD_CONNECTED) {
+                            BudgetWidgetProvider.requestUpdate(appContext)
+                        }
+                    }
                     .onFailure { err ->
                         if (err is CancellationException) throw err
                         if (err is SyncGuardException) {
@@ -232,6 +239,7 @@ class BudgetRepository private constructor(context: Context) {
             true
         }
         if (changed) {
+            BudgetWidgetProvider.requestUpdate(appContext)
             requestCoalescedSync()
         }
     }
@@ -293,6 +301,7 @@ class BudgetRepository private constructor(context: Context) {
             anyChanged
         }
         if (changed) {
+            BudgetWidgetProvider.requestUpdate(appContext)
             requestCoalescedSync()
         }
     }
@@ -798,6 +807,7 @@ class BudgetRepository private constructor(context: Context) {
         val newItems = items.filter { it.id !in existingIds }.map { it.copy(isSynced = false) }
         if (newItems.isNotEmpty()) {
             dao.upsertAll(newItems)
+            BudgetWidgetProvider.requestUpdate(appContext)
             requestCoalescedSync()
         }
         newItems.size
@@ -810,6 +820,7 @@ class BudgetRepository private constructor(context: Context) {
             isSynced = false
         )
         dao.upsert(toSave)
+        BudgetWidgetProvider.requestUpdate(appContext)
         requestCoalescedSync()
     }
 
@@ -834,6 +845,7 @@ class BudgetRepository private constructor(context: Context) {
         db.withTransaction {
             dao.upsertAll(entities)
         }
+        BudgetWidgetProvider.requestUpdate(appContext)
         requestCoalescedSync()
         return entities
     }
@@ -846,6 +858,7 @@ class BudgetRepository private constructor(context: Context) {
             isSynced = false
         )
         dao.upsert(updated)
+        BudgetWidgetProvider.requestUpdate(appContext)
         requestCoalescedSync()
     }
 
@@ -856,6 +869,7 @@ class BudgetRepository private constructor(context: Context) {
             isSynced = false
         )
         dao.upsert(deleted)
+        BudgetWidgetProvider.requestUpdate(appContext)
         requestCoalescedSync()
     }
 
@@ -866,6 +880,7 @@ class BudgetRepository private constructor(context: Context) {
             isSynced = false
         )
         dao.upsert(restored)
+        BudgetWidgetProvider.requestUpdate(appContext)
         requestCoalescedSync()
     }
 
@@ -902,6 +917,7 @@ class BudgetRepository private constructor(context: Context) {
             recurringDao.upsert(saved)
             evaluateAndPersistRecurringLocked()
         }
+        BudgetWidgetProvider.requestUpdate(appContext)
         requestCoalescedSync()
     }
 
@@ -938,6 +954,7 @@ class BudgetRepository private constructor(context: Context) {
             true
         }
         if (changed) {
+            BudgetWidgetProvider.requestUpdate(appContext)
             requestCoalescedSync()
         }
     }
@@ -965,6 +982,7 @@ class BudgetRepository private constructor(context: Context) {
             }
             recurringDao.upsert(deleted)
         }
+        BudgetWidgetProvider.requestUpdate(appContext)
         requestCoalescedSync()
     }
 
@@ -1008,6 +1026,7 @@ class BudgetRepository private constructor(context: Context) {
             }
             savingsGoalDao.upsert(saved)
         }
+        BudgetWidgetProvider.requestUpdate(appContext)
         requestCoalescedSync()
     }
 
@@ -1037,6 +1056,7 @@ class BudgetRepository private constructor(context: Context) {
             }
             savingsGoalDao.upsert(deleted)
         }
+        BudgetWidgetProvider.requestUpdate(appContext)
         requestCoalescedSync()
     }
 
@@ -1257,6 +1277,7 @@ class BudgetRepository private constructor(context: Context) {
             true
         }
         if (inserted) {
+            BudgetWidgetProvider.requestUpdate(appContext)
             requestCoalescedSync()
         }
     }

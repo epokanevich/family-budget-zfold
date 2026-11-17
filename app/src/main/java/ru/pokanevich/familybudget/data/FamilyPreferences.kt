@@ -295,10 +295,18 @@ class FamilyPreferences(context: Context) : PinLockStorage {
         }.getOrDefault(PinSecurityManager.DEFAULT_AUTO_LOCK_TIMEOUT_MS).coerceAtLeast(0L)
         set(value) = prefs.edit().putLong(KEY_PIN_AUTO_LOCK_TIMEOUT_MS, value.coerceAtLeast(0L)).apply()
 
+    /**
+     * Локальный флаг приватности виджета: маскирует суммы на рабочем столе как «•••• ₽».
+     */
+    var hideAmountsOnWidget: Boolean
+        get() = runCatching { prefs.getBoolean(KEY_HIDE_AMOUNTS_ON_WIDGET, false) }.getOrDefault(false)
+        set(value) = prefs.edit().putBoolean(KEY_HIDE_AMOUNTS_ON_WIDGET, value).apply()
+
     override fun clearPinCredentials() {
         prefs.edit()
             .putBoolean(KEY_APP_LOCK_ENABLED, false)
             .putBoolean(KEY_BIOMETRIC_ENABLED, false)
+            .putBoolean(KEY_HIDE_AMOUNTS_ON_WIDGET, false)
             .remove(KEY_PIN_SALT_HEX)
             .remove(KEY_PIN_HASH_HEX)
             .apply()
@@ -317,6 +325,7 @@ class FamilyPreferences(context: Context) : PinLockStorage {
         private const val KEY_PIN_SALT_HEX = "pin_salt_hex"
         private const val KEY_PIN_HASH_HEX = "pin_hash_hex"
         private const val KEY_PIN_AUTO_LOCK_TIMEOUT_MS = "pin_auto_lock_timeout_ms"
+        private const val KEY_HIDE_AMOUNTS_ON_WIDGET = "hide_amounts_on_widget"
 
         fun normalizeFamilyCode(raw: String): String =
             raw.trim().ifBlank { "POKANE-FAMILY" }.replace(Regex("[^A-Za-z0-9_-]"), "_")

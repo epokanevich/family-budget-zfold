@@ -4,6 +4,9 @@
 # NotificationListenerService для автоучёта пушей Сбера и Mir Pay (биндится системой по имени из манифеста)
 -keep class ru.pokanevich.familybudget.service.BankPushListenerService { *; }
 
+# Home Screen Widget
+-keep class ru.pokanevich.familybudget.widget.BudgetWidgetProvider { *; }
+
 # Room
 -keep class * extends androidx.room.RoomDatabase { <init>(); }
 -keep @androidx.room.Entity class *
