@@ -65,11 +65,13 @@ class BudgetRepository private constructor(context: Context) {
     private val db = AppDatabase.getInstance(context)
     private val dao = db.expenseDao()
     private val recurringDao = db.recurringPaymentDao()
+    private val savingsGoalDao = db.savingsGoalDao()
     val prefs = FamilyPreferences(context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val syncMutex = Mutex()
     private val ingestMutex = Mutex()
     private val recurringMutex = Mutex()
+    private val goalsMutex = Mutex()
     private val configLock = Any()
     private var pollingJob: Job? = null
 
@@ -109,10 +111,12 @@ class BudgetRepository private constructor(context: Context) {
     val confirmedExpenses: Flow<List<ExpenseEntity>> = dao.observeConfirmedExpenses()
     val pendingPushExpenses: Flow<List<ExpenseEntity>> = dao.observePendingPushExpenses()
     val recurringPayments: Flow<List<RecurringPaymentEntity>> = recurringDao.observeRecurringPayments()
+    val savingsGoals: Flow<List<SavingsGoalEntity>> = savingsGoalDao.observeSavingsGoals()
 
     init {
         scope.launch {
             reconcileAndProcessRecurringOnStartup()
+            reconcileSavingsGoalsOnStartup()
         }
         startRealtimeSync()
     }
@@ -336,6 +340,7 @@ class BudgetRepository private constructor(context: Context) {
         // и шаблоны регулярных платежей всегда приезжали раньше операций из budget_v3.json.
         syncConfigCycle(familyCode, token)
         mirrorConfigRecurringToRoom()
+        mirrorConfigGoalsToRoom()
 
         // 2. Затем синхронизируем операции в budget_v3.json.
         syncExpensesCycle(familyCode, token)
@@ -961,6 +966,153 @@ class BudgetRepository private constructor(context: Context) {
             recurringDao.upsert(deleted)
         }
         requestCoalescedSync()
+    }
+
+    suspend fun upsertSavingsGoal(goal: SavingsGoalEntity) {
+        if (goal.id.isBlank()) return
+        goalsMutex.withLock {
+            val saved = synchronized(configLock) {
+                val current = _familyConfig.value
+                val existing = current.savingsGoals.firstOrNull { it.id == goal.id }
+                val maxExistingTs = current.savingsGoals.maxOfOrNull { it.updatedAtEpochMs } ?: 0L
+                val now = maxOf(
+                    System.currentTimeMillis(),
+                    maxExistingTs + 1L,
+                    (existing?.updatedAtEpochMs ?: 0L) + 1L,
+                    goal.updatedAtEpochMs
+                )
+                val normalized = goal.copy(
+                    title = goal.title.trim(),
+                    emoji = goal.emoji.trim().ifBlank { "🎯" },
+                    targetAmountRub = if (goal.targetAmountRub.isFinite() && goal.targetAmountRub >= 0.0) {
+                        goal.targetAmountRub
+                    } else {
+                        0.0
+                    },
+                    initialAmountRub = if (goal.initialAmountRub.isFinite() && goal.initialAmountRub >= 0.0) {
+                        goal.initialAmountRub
+                    } else {
+                        0.0
+                    },
+                    updatedAtEpochMs = now
+                )
+                val updatedList = FamilyConfig.mergeSavingsGoals(
+                    local = current.savingsGoals,
+                    remote = listOf(normalized)
+                )
+                applyLocalConfigLocked(
+                    current.copy(savingsGoals = updatedList),
+                    hasUnsynced = true
+                )
+                normalized
+            }
+            savingsGoalDao.upsert(saved)
+        }
+        requestCoalescedSync()
+    }
+
+    suspend fun toggleSavingsGoalArchived(goal: SavingsGoalEntity, archived: Boolean) {
+        upsertSavingsGoal(goal.copy(isArchived = archived))
+    }
+
+    suspend fun softDeleteSavingsGoal(goal: SavingsGoalEntity) {
+        goalsMutex.withLock {
+            val deleted = synchronized(configLock) {
+                val current = _familyConfig.value
+                val latest = current.savingsGoals.firstOrNull { it.id == goal.id } ?: goal
+                val now = maxOf(System.currentTimeMillis(), latest.updatedAtEpochMs + 1L)
+                val nextGoal = latest.copy(
+                    isDeleted = true,
+                    updatedAtEpochMs = now
+                )
+                val updatedList = FamilyConfig.mergeSavingsGoals(
+                    local = current.savingsGoals,
+                    remote = listOf(nextGoal)
+                )
+                applyLocalConfigLocked(
+                    current.copy(savingsGoals = updatedList),
+                    hasUnsynced = true
+                )
+                nextGoal
+            }
+            savingsGoalDao.upsert(deleted)
+        }
+        requestCoalescedSync()
+    }
+
+    suspend fun recordGoalTransfer(
+        goal: SavingsGoalEntity,
+        amountRub: Double,
+        isDeposit: Boolean,
+        authorName: String,
+        note: String = ""
+    ) {
+        if (goal.id.isBlank() || !amountRub.isFinite() || amountRub <= 0.0) return
+        val now = System.currentTimeMillis()
+        val categoryName = if (isDeposit) {
+            SavingsGoalCalculator.CATEGORY_GOAL_DEPOSIT
+        } else {
+            SavingsGoalCalculator.CATEGORY_GOAL_WITHDRAW
+        }
+        val title = goal.title.ifBlank { "Копилка" }
+        val merchant = if (isDeposit) {
+            "Пополнение копилки: $title"
+        } else {
+            "Снятие с копилки: $title"
+        }
+        val transfer = ExpenseEntity(
+            amountRub = amountRub,
+            merchant = merchant,
+            categoryName = categoryName,
+            authorName = authorName,
+            sourceType = "MANUAL",
+            isPendingConfirmation = false,
+            isDeleted = false,
+            isSynced = false,
+            createdAtEpochMs = now,
+            updatedAtEpochMs = now,
+            note = note.trim(),
+            operationType = OperationType.TRANSFER.name,
+            goalId = goal.id
+        )
+        addOrUpdateExpense(transfer)
+    }
+
+    private suspend fun reconcileSavingsGoalsOnStartup() {
+        val needsSync = goalsMutex.withLock {
+            val roomList = savingsGoalDao.getAll()
+            var configChanged = false
+            val targetList = synchronized(configLock) {
+                val current = _familyConfig.value
+                val merged = FamilyConfig.mergeSavingsGoals(current.savingsGoals, roomList)
+                if (merged != current.savingsGoals) {
+                    applyLocalConfigLocked(current.copy(savingsGoals = merged), hasUnsynced = true)
+                    configChanged = true
+                }
+                merged
+            }
+            if (targetList.isNotEmpty()) {
+                savingsGoalDao.upsertAll(targetList)
+            }
+            configChanged
+        }
+        if (needsSync) {
+            requestCoalescedSync()
+        }
+    }
+
+    private suspend fun mirrorConfigGoalsToRoom() {
+        goalsMutex.withLock {
+            val configGoals = synchronized(configLock) { _familyConfig.value.savingsGoals }
+            val roomById = savingsGoalDao.getAll().associateBy { it.id }
+            val toUpsert = configGoals.filter { cfg ->
+                val existing = roomById[cfg.id]
+                existing == null || existing != cfg
+            }
+            if (toUpsert.isNotEmpty()) {
+                savingsGoalDao.upsertAll(toUpsert)
+            }
+        }
     }
 
     private suspend fun reconcileAndProcessRecurringOnStartup() {

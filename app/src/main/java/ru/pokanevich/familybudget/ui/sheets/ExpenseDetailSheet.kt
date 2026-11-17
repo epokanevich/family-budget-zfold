@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
 import ru.pokanevich.familybudget.data.RecurringPaymentScheduler
+import ru.pokanevich.familybudget.data.SavingsGoalCalculator
 import ru.pokanevich.familybudget.ui.theme.AuthorPill
 import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
@@ -61,9 +62,14 @@ fun ExpenseDetailSheet(
 ) {
     val palette = LocalFamilyPalette.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val resolvedCategory = registry.resolve(expense.categoryName)
+    val resolvedCategory = SavingsGoalCalculator.resolveDisplayCategory(expense, registry)
     val isIncome = expense.isIncome(registry)
     val isTransfer = expense.isTransfer(registry)
+    val transferTitle = when (expense.categoryName) {
+        SavingsGoalCalculator.CATEGORY_GOAL_DEPOSIT -> "Пополнение копилки"
+        SavingsGoalCalculator.CATEGORY_GOAL_WITHDRAW -> "Снятие с копилки"
+        else -> "Перевод между своими"
+    }
     val splitSiblings = if (expense.splitGroupId.isNotBlank()) {
         allExpenses.filter {
             !it.isDeleted && it.splitGroupId == expense.splitGroupId && it.id != expense.id
@@ -133,7 +139,7 @@ fun ExpenseDetailSheet(
                         border = BorderStroke(1.dp, palette.outlineSubtle)
                     ) {
                         Text(
-                            text = "Перевод между своими",
+                            text = transferTitle,
                             style = MaterialTheme.typography.labelMedium,
                             color = palette.textSecondary,
                             fontWeight = FontWeight.Medium,
@@ -180,7 +186,7 @@ fun ExpenseDetailSheet(
                     if (isTransfer) {
                         DetailInfoRow(label = "Статус") {
                             Text(
-                                text = "Перевод между своими",
+                                text = transferTitle,
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium,
                                 color = palette.textSecondary

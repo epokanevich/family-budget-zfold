@@ -13,13 +13,14 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * (схемы экспортируются в app/schemas и коммитятся в репозиторий).
  */
 @Database(
-    entities = [ExpenseEntity::class, RecurringPaymentEntity::class],
-    version = 3,
+    entities = [ExpenseEntity::class, RecurringPaymentEntity::class, SavingsGoalEntity::class],
+    version = 4,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun expenseDao(): ExpenseDao
     abstract fun recurringPaymentDao(): RecurringPaymentDao
+    abstract fun savingsGoalDao(): SavingsGoalDao
 
     companion object {
         @Volatile
@@ -53,6 +54,24 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `savings_goals` (" +
+                        "`id` TEXT NOT NULL, " +
+                        "`title` TEXT NOT NULL, " +
+                        "`emoji` TEXT NOT NULL, " +
+                        "`targetAmountRub` REAL NOT NULL, " +
+                        "`initialAmountRub` REAL NOT NULL, " +
+                        "`isArchived` INTEGER NOT NULL, " +
+                        "`isDeleted` INTEGER NOT NULL, " +
+                        "`updatedAtEpochMs` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`id`))"
+                )
+                db.execSQL("ALTER TABLE expenses ADD COLUMN goalId TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -60,7 +79,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "family_budget_zfold.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { INSTANCE = it }
             }

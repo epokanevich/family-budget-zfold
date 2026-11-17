@@ -13,7 +13,8 @@ data class FamilyConfig(
     val monthlyBudgetRub: Double = DEFAULT_MONTHLY_BUDGET_RUB,
     val budgetUpdatedAtEpochMs: Long = 0L,
     val categories: List<CategoryDescriptor> = emptyList(),
-    val recurringPayments: List<RecurringPaymentEntity> = emptyList()
+    val recurringPayments: List<RecurringPaymentEntity> = emptyList(),
+    val savingsGoals: List<SavingsGoalEntity> = emptyList()
 ) {
     fun toRegistry(): CategoryRegistry = CategoryRegistry(categories)
 
@@ -31,6 +32,11 @@ data class FamilyConfig(
             recurringArr.put(payment.toJsonObject())
         }
         put("recurringPayments", recurringArr)
+        val goalsArr = JSONArray()
+        for (goal in savingsGoals.filter { it.id.isNotBlank() }.sortedBy { it.id }) {
+            goalsArr.put(goal.toJsonObject())
+        }
+        put("savingsGoals", goalsArr)
     }
 
     fun isEquivalentTo(other: FamilyConfig): Boolean {
@@ -40,7 +46,9 @@ data class FamilyConfig(
             normalizeById(categories, { it.id }, { it.updatedAtEpochMs }) ==
             normalizeById(other.categories, { it.id }, { it.updatedAtEpochMs }) &&
             normalizeById(recurringPayments, { it.id }, { it.updatedAtEpochMs }) ==
-            normalizeById(other.recurringPayments, { it.id }, { it.updatedAtEpochMs })
+            normalizeById(other.recurringPayments, { it.id }, { it.updatedAtEpochMs }) &&
+            normalizeById(savingsGoals, { it.id }, { it.updatedAtEpochMs }) ==
+            normalizeById(other.savingsGoals, { it.id }, { it.updatedAtEpochMs })
     }
 
     companion object {
@@ -110,6 +118,12 @@ data class FamilyConfig(
         ): List<RecurringPaymentEntity> =
             mergeById(local, remote, { it.id }, { it.updatedAtEpochMs })
 
+        fun mergeSavingsGoals(
+            local: List<SavingsGoalEntity>,
+            remote: List<SavingsGoalEntity>
+        ): List<SavingsGoalEntity> =
+            mergeById(local, remote, { it.id }, { it.updatedAtEpochMs })
+
         fun fromJsonString(raw: String): FamilyConfig? {
             if (raw.isBlank()) return null
             return runCatching { fromJsonObject(JSONObject(raw)) }.getOrNull()
@@ -119,7 +133,8 @@ data class FamilyConfig(
             val hasRecognizedField = obj.has("schemaVersion") ||
                 obj.has("monthlyBudgetRub") ||
                 obj.has("categories") ||
-                obj.has("recurringPayments")
+                obj.has("recurringPayments") ||
+                obj.has("savingsGoals")
             if (!hasRecognizedField) return null
 
             val schemaVersion = if (obj.has("schemaVersion") && !obj.isNull("schemaVersion")) {
@@ -159,12 +174,20 @@ data class FamilyConfig(
                 updatedAtOf = { it.updatedAtEpochMs }
             )
 
+            val savingsGoals = parseJsonArrayDeduped(
+                arr = obj.optJSONArray("savingsGoals"),
+                parseItem = SavingsGoalEntity::fromJsonObject,
+                idOf = { it.id },
+                updatedAtOf = { it.updatedAtEpochMs }
+            )
+
             return FamilyConfig(
                 schemaVersion = schemaVersion,
                 monthlyBudgetRub = monthlyBudgetRub,
                 budgetUpdatedAtEpochMs = budgetUpdatedAtEpochMs,
                 categories = categories,
-                recurringPayments = recurringPayments
+                recurringPayments = recurringPayments,
+                savingsGoals = savingsGoals
             )
         }
 
@@ -198,13 +221,18 @@ data class FamilyConfig(
                 local = local.recurringPayments,
                 remote = remote.recurringPayments
             )
+            val mergedGoals = mergeSavingsGoals(
+                local = local.savingsGoals,
+                remote = remote.savingsGoals
+            )
 
             return FamilyConfig(
                 schemaVersion = mergedSchemaVersion,
                 monthlyBudgetRub = mergedBudget,
                 budgetUpdatedAtEpochMs = mergedBudgetUpdatedAt,
                 categories = mergedCategories,
-                recurringPayments = mergedRecurring
+                recurringPayments = mergedRecurring,
+                savingsGoals = mergedGoals
             )
         }
     }

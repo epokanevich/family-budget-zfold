@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -24,17 +25,20 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.PieChart
 import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -55,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import ru.pokanevich.familybudget.ai.AiBudgetAdvisor
 import ru.pokanevich.familybudget.ai.AiBudgetReport
@@ -63,6 +68,10 @@ import ru.pokanevich.familybudget.data.CategoryDescriptor
 import ru.pokanevich.familybudget.data.OperationType
 import ru.pokanevich.familybudget.data.RecurringPaymentEntity
 import ru.pokanevich.familybudget.data.RecurringPaymentScheduler
+import ru.pokanevich.familybudget.data.SavingsGoalEntity
+import ru.pokanevich.familybudget.data.SavingsGoalProgress
+import ru.pokanevich.familybudget.ui.sheets.GoalTransferDialog
+import ru.pokanevich.familybudget.ui.sheets.SavingsGoalEditorDialog
 import ru.pokanevich.familybudget.ui.theme.AuthorAvatarCircle
 import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
@@ -93,6 +102,12 @@ fun AiAnalyticsPane(
     onOpenSettings: () -> Unit,
     recurringPayments: List<RecurringPaymentEntity> = emptyList(),
     onOpenRecurringPayments: (() -> Unit)? = null,
+    goalProgressList: List<SavingsGoalProgress> = emptyList(),
+    isUnfoldedFoldable: Boolean = false,
+    currentUserName: String = "Евгений",
+    onOpenSavingsGoals: (() -> Unit)? = null,
+    onSaveSavingsGoal: ((SavingsGoalEntity) -> Unit)? = null,
+    onRecordGoalTransfer: ((SavingsGoalEntity, Double, Boolean, String, String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val palette = LocalFamilyPalette.current
@@ -102,6 +117,8 @@ fun AiAnalyticsPane(
     var isLoadingCloudAi by remember { mutableStateOf(false) }
     var selectedChartCategoryId by remember { mutableStateOf<String?>(null) }
     var showIncomesInChart by remember { mutableStateOf(false) }
+    var showNewGoalDialog by remember { mutableStateOf(false) }
+    var quickGoalTransfer by remember { mutableStateOf<Pair<SavingsGoalProgress, Boolean>?>(null) }
 
     Column(
         modifier = modifier
@@ -142,6 +159,19 @@ fun AiAnalyticsPane(
 
         // 3. Family Member Contribution & Cumulative Balance Card
         CoupleContributionCard(report = report)
+
+        if (onOpenSavingsGoals != null || onSaveSavingsGoal != null) {
+            SavingsGoalsAnalyticsCard(
+                goalProgressList = goalProgressList,
+                totalSavedInGoalsRub = report.totalSavedInGoalsRub,
+                freeUnallocatedBalanceRub = report.freeUnallocatedBalanceRub,
+                isUnfoldedFoldable = isUnfoldedFoldable,
+                onDeposit = { progress -> quickGoalTransfer = progress to true },
+                onWithdraw = { progress -> quickGoalTransfer = progress to false },
+                onNewGoal = { showNewGoalDialog = true },
+                onOpenManageSheet = { onOpenSavingsGoals?.invoke() }
+            )
+        }
 
         if (onOpenRecurringPayments != null) {
             RecurringPaymentsAnalyticsCard(
@@ -316,6 +346,33 @@ fun AiAnalyticsPane(
         }
 
         Spacer(modifier = Modifier.height(86.dp))
+    }
+
+    if (showNewGoalDialog && onSaveSavingsGoal != null) {
+        SavingsGoalEditorDialog(
+            initialGoal = null,
+            onDismiss = { showNewGoalDialog = false },
+            onSave = { goal ->
+                onSaveSavingsGoal(goal)
+                showNewGoalDialog = false
+            }
+        )
+    }
+
+    quickGoalTransfer?.let { (progress, isDeposit) ->
+        if (onRecordGoalTransfer != null) {
+            GoalTransferDialog(
+                progress = progress,
+                isDeposit = isDeposit,
+                freeUnallocatedBalanceRub = report.freeUnallocatedBalanceRub,
+                defaultAuthorName = currentUserName,
+                onDismiss = { quickGoalTransfer = null },
+                onConfirm = { amountRub, authorName, note ->
+                    onRecordGoalTransfer(progress.goal, amountRub, isDeposit, authorName, note)
+                    quickGoalTransfer = null
+                }
+            )
+        }
     }
 }
 
@@ -1016,6 +1073,319 @@ private fun RecurringPaymentsAnalyticsCard(
                 tint = palette.textMuted,
                 modifier = Modifier.size(22.dp)
             )
+        }
+    }
+}
+
+@Composable
+private fun SavingsGoalsAnalyticsCard(
+    goalProgressList: List<SavingsGoalProgress>,
+    totalSavedInGoalsRub: Double,
+    freeUnallocatedBalanceRub: Double,
+    isUnfoldedFoldable: Boolean,
+    onDeposit: (SavingsGoalProgress) -> Unit,
+    onWithdraw: (SavingsGoalProgress) -> Unit,
+    onNewGoal: () -> Unit,
+    onOpenManageSheet: () -> Unit
+) {
+    val palette = LocalFamilyPalette.current
+    val activeGoals = remember(goalProgressList) {
+        goalProgressList.filter { !it.goal.isArchived }
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = palette.surfaceCard,
+        border = BorderStroke(1.dp, palette.outlineSubtle)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = onOpenManageSheet),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(palette.accentEmeraldSoft),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Savings,
+                        contentDescription = null,
+                        tint = palette.accentEmerald,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = "Семейные копилки",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = palette.textPrimary
+                    )
+                    Text(
+                        text = "В копилках: ${Formatters.formatRub(totalSavedInGoalsRub)} • Свободно: ${Formatters.formatRub(freeUnallocatedBalanceRub)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Rounded.ChevronRight,
+                    contentDescription = "Управление копилками",
+                    tint = palette.textMuted,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+
+            if (activeGoals.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(palette.surfaceElevated)
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = "Копилок пока нет. Откладывайте на общие цели переводом — траты месяца останутся точными.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = palette.textSecondary
+                    )
+                }
+            } else {
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                    val useTwoColumns = isUnfoldedFoldable || maxWidth >= 520.dp
+                    if (useTwoColumns) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            activeGoals.chunked(2).forEach { pair ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    pair.forEach { progress ->
+                                        DashboardGoalTile(
+                                            progress = progress,
+                                            compact = true,
+                                            onDeposit = { onDeposit(progress) },
+                                            onWithdraw = { onWithdraw(progress) },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    if (pair.size == 1) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            activeGoals.forEach { progress ->
+                                DashboardGoalTile(
+                                    progress = progress,
+                                    compact = false,
+                                    onDeposit = { onDeposit(progress) },
+                                    onWithdraw = { onWithdraw(progress) },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = onNewGoal,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = palette.accentEmeraldSoft,
+                        contentColor = palette.accentEmerald
+                    ),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Новая цель",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = onOpenManageSheet,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    border = BorderStroke(1.dp, palette.outlineSubtle)
+                ) {
+                    Text(
+                        text = "Управление",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = palette.textPrimary,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardGoalTile(
+    progress: SavingsGoalProgress,
+    compact: Boolean,
+    onDeposit: () -> Unit,
+    onWithdraw: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val palette = LocalFamilyPalette.current
+    val goal = progress.goal
+    val animatedProgress by animateFloatAsState(
+        targetValue = progress.progressRatio,
+        animationSpec = tween(durationMillis = 550),
+        label = "dashboardGoalProgress"
+    )
+    val barColor = if (progress.isCompleted) palette.accentEmerald else palette.accentBlue
+    val percent = (progress.progressRatio * 100f).roundToInt()
+
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(14.dp),
+        color = palette.surfaceElevated
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = if (compact) 10.dp else 12.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = goal.emoji.ifBlank { "🎯" },
+                        fontSize = if (compact) 15.sp else 17.sp
+                    )
+                    Text(
+                        text = goal.title.ifBlank { "Копилка" },
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = if (progress.isCompleted) "✓ $percent%" else "$percent%",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = barColor,
+                    maxLines = 1
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(palette.surfaceCard)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(animatedProgress)
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(barColor)
+                )
+            }
+
+            Text(
+                text = if (goal.targetAmountRub > 0.0) {
+                    "${Formatters.formatRub(progress.savedAmountRub)} / ${Formatters.formatRub(goal.targetAmountRub)}"
+                } else {
+                    Formatters.formatRub(progress.savedAmountRub)
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = palette.textSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .weight(1.35f)
+                        .clip(RoundedCornerShape(9.dp))
+                        .clickable(onClick = onDeposit),
+                    shape = RoundedCornerShape(9.dp),
+                    color = palette.accentEmeraldSoft
+                ) {
+                    Text(
+                        text = "+ Пополнить",
+                        fontSize = if (compact) 11.sp else 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.accentEmerald,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)
+                    )
+                }
+
+                Surface(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(9.dp))
+                        .clickable(onClick = onWithdraw),
+                    shape = RoundedCornerShape(9.dp),
+                    color = palette.surfaceCard,
+                    border = BorderStroke(1.dp, palette.outlineSubtle)
+                ) {
+                    Text(
+                        text = "Снять",
+                        fontSize = if (compact) 11.sp else 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = palette.textPrimary,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)
+                    )
+                }
+            }
         }
     }
 }

@@ -11,6 +11,8 @@ import ru.pokanevich.familybudget.data.ExpenseEntity
 import ru.pokanevich.familybudget.data.OperationType
 import ru.pokanevich.familybudget.data.RecurringPaymentEntity
 import ru.pokanevich.familybudget.data.RecurringPaymentScheduler
+import ru.pokanevich.familybudget.data.SavingsGoalCalculator
+import ru.pokanevich.familybudget.data.SavingsGoalEntity
 import ru.pokanevich.familybudget.ui.util.BudgetPeriod
 import ru.pokanevich.familybudget.ui.util.Formatters
 import ru.pokanevich.familybudget.ui.util.PeriodCalculator
@@ -45,6 +47,8 @@ data class AiBudgetReport(
     val allTimeIncomeRub: Double,
     val allTimeExpenseRub: Double,
     val allTimeBalanceRub: Double,
+    val totalSavedInGoalsRub: Double = 0.0,
+    val freeUnallocatedBalanceRub: Double = 0.0,
     val monthlyBudgetRub: Double,
     val expectedSpentByTodayRub: Double,
     val safeDailySpendRemainingRub: Double,
@@ -98,7 +102,8 @@ object AiBudgetAdvisor {
         window: PeriodWindow = PeriodCalculator.buildWindow(BudgetPeriod.MONTH, System.currentTimeMillis()),
         registry: CategoryRegistry = CategoryRegistry.DEFAULT,
         recurringPayments: List<RecurringPaymentEntity> = emptyList(),
-        nowMs: Long = System.currentTimeMillis()
+        nowMs: Long = System.currentTimeMillis(),
+        savingsGoals: List<SavingsGoalEntity> = emptyList()
     ): AiBudgetReport {
         val activeAll = expenses.filter {
             !it.isDeleted && !it.isPendingConfirmation && !it.isTransfer(registry)
@@ -108,6 +113,8 @@ object AiBudgetAdvisor {
         val allTimeIncome = activeAll.filter { it.isIncome(registry) }.sumOf { it.amountRub }
         val allTimeExpense = activeAll.filter { !it.isIncome(registry) }.sumOf { it.amountRub }
         val allTimeBalance = allTimeIncome - allTimeExpense
+        val totalSavedInGoalsRub = SavingsGoalCalculator.calculateTotalSavedInGoals(savingsGoals, expenses)
+        val freeUnallocatedBalanceRub = allTimeBalance - totalSavedInGoalsRub
 
         val periodItems = if (window.period == BudgetPeriod.ALL) {
             activeAll
@@ -293,6 +300,8 @@ object AiBudgetAdvisor {
             allTimeIncomeRub = allTimeIncome,
             allTimeExpenseRub = allTimeExpense,
             allTimeBalanceRub = allTimeBalance,
+            totalSavedInGoalsRub = totalSavedInGoalsRub,
+            freeUnallocatedBalanceRub = freeUnallocatedBalanceRub,
             monthlyBudgetRub = periodBudget,
             expectedSpentByTodayRub = expectedByToday,
             safeDailySpendRemainingRub = safeDaily,

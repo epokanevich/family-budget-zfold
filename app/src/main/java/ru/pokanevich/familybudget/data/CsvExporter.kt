@@ -69,7 +69,11 @@ object CsvExporter {
                 OperationType.TRANSFER -> "Перевод"
             }
 
-            val categoryStr = registry.resolve(expense.categoryName).displayName
+            val categoryStr = when (expense.categoryName) {
+                SavingsGoalCalculator.CATEGORY_GOAL_DEPOSIT -> "Пополнение копилки"
+                SavingsGoalCalculator.CATEGORY_GOAL_WITHDRAW -> "Снятие с копилки"
+                else -> registry.resolve(expense.categoryName).displayName
+            }
             val amountStr = amountFormatter.format(expense.amountRub)
             val merchantStr = expense.merchant
             val noteStr = expense.note

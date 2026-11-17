@@ -34,7 +34,8 @@ data class ExpenseEntity(
     val dedupSignature: String = "",    // Защита от дублей одного и того же пуша Сбера и Mir Pay
     val note: String = "",              // Необязательная заметка к операции
     val splitGroupId: String = "",      // Общий UUID частей разделённого чека (Split)
-    val operationType: String = ""      // "", "EXPENSE", "INCOME", "TRANSFER"
+    val operationType: String = "",     // "", "EXPENSE", "INCOME", "TRANSFER"
+    val goalId: String = ""             // UUID семейной копилки при GOAL_DEPOSIT / GOAL_WITHDRAW
 ) {
     val category: ExpenseCategory
         get() = ExpenseCategory.fromStoredName(categoryName)
@@ -90,6 +91,7 @@ data class ExpenseEntity(
         if (effectiveOp != defaultOperationType(registry)) {
             put("operationType", effectiveOp.name)
         }
+        if (goalId.isNotEmpty()) put("goalId", goalId)
     }
 
     companion object {
@@ -114,6 +116,7 @@ data class ExpenseEntity(
             val note = obj.optStringSafe("note")
             val splitGroupId = obj.optStringSafe("splitGroupId")
             val operationType = obj.optStringSafe("operationType")
+            val goalId = obj.optStringSafe("goalId")
 
             return ExpenseEntity(
                 id = id,
@@ -131,7 +134,8 @@ data class ExpenseEntity(
                 dedupSignature = dedup,
                 note = note,
                 splitGroupId = splitGroupId,
-                operationType = operationType
+                operationType = operationType,
+                goalId = goalId
             )
         }
     }

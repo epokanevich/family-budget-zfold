@@ -61,6 +61,7 @@ import ru.pokanevich.familybudget.data.CategoryDescriptor
 import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
 import ru.pokanevich.familybudget.data.OperationType
+import ru.pokanevich.familybudget.data.SavingsGoalCalculator
 import ru.pokanevich.familybudget.data.SplitExpenseBuilder
 import ru.pokanevich.familybudget.data.SplitPartInput
 import ru.pokanevich.familybudget.ui.theme.AuthorAvatarCircle
@@ -796,14 +797,22 @@ fun AddEditExpenseSheet(
                             inputs
                         )
                     } else {
-                        val saveCategory = if (isTransferMode) registry.otherExpenseCategory else selectedCategory
+                        val isGoalTransfer = isTransferMode &&
+                            editingExpense?.goalId?.isNotBlank() == true &&
+                            (editingExpense.categoryName == SavingsGoalCalculator.CATEGORY_GOAL_DEPOSIT ||
+                                editingExpense.categoryName == SavingsGoalCalculator.CATEGORY_GOAL_WITHDRAW)
+                        val saveCategoryId = when {
+                            isGoalTransfer -> editingExpense!!.categoryName
+                            isTransferMode -> registry.otherExpenseCategory.id
+                            else -> selectedCategory.id
+                        }
                         val saveMerchant = merchantText.trim().ifBlank {
-                            if (isTransferMode) "Перевод между своими" else saveCategory.displayName
+                            if (isTransferMode) "Перевод между своими" else selectedCategory.displayName
                         }
                         onSave(
                             parsedAmount,
                             saveMerchant,
-                            saveCategory.id,
+                            saveCategoryId,
                             selectedAuthor,
                             noteText.trim(),
                             selectedOperationType.name

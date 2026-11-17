@@ -55,6 +55,7 @@ import ru.pokanevich.familybudget.data.CategoryDescriptor
 import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
 import ru.pokanevich.familybudget.data.RecurringPaymentScheduler
+import ru.pokanevich.familybudget.data.SavingsGoalCalculator
 import ru.pokanevich.familybudget.ui.theme.CategoryIconBadge
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
 import ru.pokanevich.familybudget.ui.util.BudgetPeriod
@@ -459,7 +460,7 @@ fun ExpensesFeedPane(
                             group.items.forEachIndexed { index, expense ->
                                 ExpenseTransactionRow(
                                     expense = expense,
-                                    resolvedCategory = registry.resolve(expense.categoryName),
+                                    resolvedCategory = SavingsGoalCalculator.resolveDisplayCategory(expense, registry),
                                     isIncome = expense.isIncome(registry),
                                     isTransfer = expense.isTransfer(registry),
                                     onClick = { onExpenseClick(expense) }
@@ -575,7 +576,7 @@ private fun ExpenseTransactionRow(
                             .padding(horizontal = 6.dp, vertical = 1.dp)
                     ) {
                         Text(
-                            text = "Перевод",
+                            text = SavingsGoalCalculator.transferBadgeLabel(expense),
                             style = MaterialTheme.typography.labelSmall,
                             color = palette.textSecondary,
                             fontWeight = FontWeight.Medium

@@ -96,6 +96,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import ru.pokanevich.familybudget.data.ExpenseEntity
 import ru.pokanevich.familybudget.data.MoneyManagerImporter
+import ru.pokanevich.familybudget.data.SavingsGoalCalculator
 import ru.pokanevich.familybudget.data.SyncState
 import ru.pokanevich.familybudget.scanner.QrScannerDialog
 import ru.pokanevich.familybudget.service.BankPushListenerService
@@ -107,6 +108,7 @@ import ru.pokanevich.familybudget.ui.sheets.CategoriesAndLimitsSheet
 import ru.pokanevich.familybudget.ui.sheets.ExpenseDetailSheet
 import ru.pokanevich.familybudget.ui.sheets.FamilySettingsSheet
 import ru.pokanevich.familybudget.ui.sheets.RecurringPaymentsSheet
+import ru.pokanevich.familybudget.ui.sheets.SavingsGoalsSheet
 import ru.pokanevich.familybudget.ui.theme.AppThemeMode
 import ru.pokanevich.familybudget.ui.theme.AuthorAvatarCircle
 import ru.pokanevich.familybudget.ui.theme.FamilyBudgetTheme
@@ -193,6 +195,7 @@ fun FamilyBudgetApp(
     val familyConfig by repository.familyConfig.collectAsState()
     val categoryRegistry by repository.categoryRegistry.collectAsState()
     val recurringPayments by repository.recurringPayments.collectAsState(initial = emptyList())
+    val savingsGoals by repository.savingsGoals.collectAsState(initial = emptyList())
 
     var currentUserName by remember { mutableStateOf(repository.prefs.currentUserName) }
     var familySpaceCode by remember { mutableStateOf(repository.prefs.familySpaceCode) }
@@ -215,6 +218,7 @@ fun FamilyBudgetApp(
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showCategoriesAndLimitsSheet by remember { mutableStateOf(false) }
     var showRecurringPaymentsSheet by remember { mutableStateOf(false) }
+    var showSavingsGoalsSheet by remember { mutableStateOf(false) }
     var prefilledAmount by remember { mutableStateOf("") }
     var prefilledMerchant by remember { mutableStateOf("") }
     var isImportingBackup by remember { mutableStateOf(false) }
@@ -310,14 +314,26 @@ fun FamilyBudgetApp(
         }
     }
 
-    val aiReport = remember(confirmedExpenses, monthlyBudgetRub, periodWindow, categoryRegistry, recurringPayments) {
+    val aiReport = remember(
+        confirmedExpenses,
+        monthlyBudgetRub,
+        periodWindow,
+        categoryRegistry,
+        recurringPayments,
+        savingsGoals
+    ) {
         AiBudgetAdvisor.buildInstantLocalReport(
             expenses = confirmedExpenses,
             monthlyBudgetRub = monthlyBudgetRub,
             window = periodWindow,
             registry = categoryRegistry,
-            recurringPayments = recurringPayments
+            recurringPayments = recurringPayments,
+            savingsGoals = savingsGoals
         )
+    }
+
+    val goalProgressList = remember(savingsGoals, confirmedExpenses) {
+        SavingsGoalCalculator.buildGoalProgressList(savingsGoals, confirmedExpenses)
     }
 
     val stepPeriod: (Int) -> Unit = { delta ->
@@ -524,7 +540,25 @@ fun FamilyBudgetApp(
                         onJumpToCurrent = jumpToCurrent,
                         onOpenSettings = { showSettingsSheet = true },
                         recurringPayments = recurringPayments,
-                        onOpenRecurringPayments = { showRecurringPaymentsSheet = true }
+                        onOpenRecurringPayments = { showRecurringPaymentsSheet = true },
+                        goalProgressList = goalProgressList,
+                        isUnfoldedFoldable = isUnfoldedFoldable,
+                        currentUserName = currentUserName,
+                        onOpenSavingsGoals = { showSavingsGoalsSheet = true },
+                        onSaveSavingsGoal = { goal ->
+                            scope.launch { repository.upsertSavingsGoal(goal) }
+                        },
+                        onRecordGoalTransfer = { goal, amountRub, isDeposit, authorName, note ->
+                            scope.launch {
+                                repository.recordGoalTransfer(
+                                    goal = goal,
+                                    amountRub = amountRub,
+                                    isDeposit = isDeposit,
+                                    authorName = authorName,
+                                    note = note
+                                )
+                            }
+                        }
                     )
                 }
             }
@@ -581,7 +615,25 @@ fun FamilyBudgetApp(
                         onJumpToCurrent = jumpToCurrent,
                         onOpenSettings = { showSettingsSheet = true },
                         recurringPayments = recurringPayments,
-                        onOpenRecurringPayments = { showRecurringPaymentsSheet = true }
+                        onOpenRecurringPayments = { showRecurringPaymentsSheet = true },
+                        goalProgressList = goalProgressList,
+                        isUnfoldedFoldable = false,
+                        currentUserName = currentUserName,
+                        onOpenSavingsGoals = { showSavingsGoalsSheet = true },
+                        onSaveSavingsGoal = { goal ->
+                            scope.launch { repository.upsertSavingsGoal(goal) }
+                        },
+                        onRecordGoalTransfer = { goal, amountRub, isDeposit, authorName, note ->
+                            scope.launch {
+                                repository.recordGoalTransfer(
+                                    goal = goal,
+                                    amountRub = amountRub,
+                                    isDeposit = isDeposit,
+                                    authorName = authorName,
+                                    note = note
+                                )
+                            }
+                        }
                     )
                 }
             }
@@ -833,6 +885,36 @@ fun FamilyBudgetApp(
                 scope.launch { repository.softDeleteRecurringPayment(payment) }
             },
             onDismiss = { showRecurringPaymentsSheet = false }
+        )
+    }
+
+    if (showSavingsGoalsSheet) {
+        SavingsGoalsSheet(
+            goalProgressList = goalProgressList,
+            totalSavedInGoalsRub = aiReport.totalSavedInGoalsRub,
+            freeUnallocatedBalanceRub = aiReport.freeUnallocatedBalanceRub,
+            currentUserName = currentUserName,
+            onSaveGoal = { goal ->
+                scope.launch { repository.upsertSavingsGoal(goal) }
+            },
+            onToggleArchived = { goal, archived ->
+                scope.launch { repository.toggleSavingsGoalArchived(goal, archived) }
+            },
+            onDeleteGoal = { goal ->
+                scope.launch { repository.softDeleteSavingsGoal(goal) }
+            },
+            onRecordTransfer = { goal, amountRub, isDeposit, authorName, note ->
+                scope.launch {
+                    repository.recordGoalTransfer(
+                        goal = goal,
+                        amountRub = amountRub,
+                        isDeposit = isDeposit,
+                        authorName = authorName,
+                        note = note
+                    )
+                }
+            },
+            onDismiss = { showSavingsGoalsSheet = false }
         )
     }
 }
