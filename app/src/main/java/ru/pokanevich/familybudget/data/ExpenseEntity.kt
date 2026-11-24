@@ -1,6 +1,7 @@
 package ru.pokanevich.familybudget.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 import org.json.JSONObject
 import java.util.UUID
@@ -16,7 +17,15 @@ enum class OperationType {
  * Каждая трата имеет свой глобальный UUIDv4 и флаг мягкого удаления (isDeleted),
  * благодаря чему два телефона никогда не перезаписывают и не теряют траты друг друга.
  */
-@Entity(tableName = "expenses")
+@Entity(
+    tableName = "expenses",
+    indices = [
+        Index(value = ["isDeleted", "isPendingConfirmation", "createdAtEpochMs"]),
+        Index(value = ["isSynced"]),
+        Index(value = ["dedupSignature", "createdAtEpochMs"]),
+        Index(value = ["splitGroupId"])
+    ]
+)
 data class ExpenseEntity(
     @PrimaryKey
     val id: String = UUID.randomUUID().toString(),
@@ -35,7 +44,8 @@ data class ExpenseEntity(
     val note: String = "",              // Необязательная заметка к операции
     val splitGroupId: String = "",      // Общий UUID частей разделённого чека (Split)
     val operationType: String = "",     // "", "EXPENSE", "INCOME", "TRANSFER"
-    val goalId: String = ""             // UUID семейной копилки при GOAL_DEPOSIT / GOAL_WITHDRAW
+    val goalId: String = "",            // UUID семейной копилки при GOAL_DEPOSIT / GOAL_WITHDRAW
+    val originDeviceId: String = ""     // Устойчивый ID установки телефона-источника для кросс-девайсной дедупликации
 ) {
     val category: ExpenseCategory
         get() = ExpenseCategory.fromStoredName(categoryName)
@@ -92,6 +102,7 @@ data class ExpenseEntity(
             put("operationType", effectiveOp.name)
         }
         if (goalId.isNotEmpty()) put("goalId", goalId)
+        if (originDeviceId.isNotEmpty()) put("originDeviceId", originDeviceId)
     }
 
     companion object {
@@ -117,6 +128,7 @@ data class ExpenseEntity(
             val splitGroupId = obj.optStringSafe("splitGroupId")
             val operationType = obj.optStringSafe("operationType")
             val goalId = obj.optStringSafe("goalId")
+            val originDeviceId = obj.optStringSafe("originDeviceId")
 
             return ExpenseEntity(
                 id = id,
@@ -135,7 +147,8 @@ data class ExpenseEntity(
                 note = note,
                 splitGroupId = splitGroupId,
                 operationType = operationType,
-                goalId = goalId
+                goalId = goalId,
+                originDeviceId = originDeviceId
             )
         }
     }

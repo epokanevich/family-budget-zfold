@@ -14,7 +14,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  */
 @Database(
     entities = [ExpenseEntity::class, RecurringPaymentEntity::class, SavingsGoalEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -72,6 +72,26 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE expenses ADD COLUMN originDeviceId TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_expenses_isDeleted_isPendingConfirmation_createdAtEpochMs` " +
+                        "ON `expenses` (`isDeleted`, `isPendingConfirmation`, `createdAtEpochMs`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_expenses_isSynced` ON `expenses` (`isSynced`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_expenses_dedupSignature_createdAtEpochMs` " +
+                        "ON `expenses` (`dedupSignature`, `createdAtEpochMs`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_expenses_splitGroupId` ON `expenses` (`splitGroupId`)"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: Room.databaseBuilder(
@@ -79,7 +99,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "family_budget_zfold.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                     .also { INSTANCE = it }
             }

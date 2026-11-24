@@ -1,0 +1,318 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 5,
+    "identityHash": "6360964d7745877960b1c0ad4d3f3dd0",
+    "entities": [
+      {
+        "tableName": "expenses",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `amountRub` REAL NOT NULL, `merchant` TEXT NOT NULL, `categoryName` TEXT NOT NULL, `authorName` TEXT NOT NULL, `sourceType` TEXT NOT NULL, `isPendingConfirmation` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `isSynced` INTEGER NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL, `rawPushOrQrText` TEXT NOT NULL, `dedupSignature` TEXT NOT NULL, `note` TEXT NOT NULL, `splitGroupId` TEXT NOT NULL, `operationType` TEXT NOT NULL, `goalId` TEXT NOT NULL, `originDeviceId` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "amountRub",
+            "columnName": "amountRub",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "merchant",
+            "columnName": "merchant",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryName",
+            "columnName": "categoryName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authorName",
+            "columnName": "authorName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceType",
+            "columnName": "sourceType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isPendingConfirmation",
+            "columnName": "isPendingConfirmation",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isSynced",
+            "columnName": "isSynced",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMs",
+            "columnName": "updatedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rawPushOrQrText",
+            "columnName": "rawPushOrQrText",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dedupSignature",
+            "columnName": "dedupSignature",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "splitGroupId",
+            "columnName": "splitGroupId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "operationType",
+            "columnName": "operationType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "goalId",
+            "columnName": "goalId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "originDeviceId",
+            "columnName": "originDeviceId",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_expenses_isDeleted_isPendingConfirmation_createdAtEpochMs",
+            "unique": false,
+            "columnNames": [
+              "isDeleted",
+              "isPendingConfirmation",
+              "createdAtEpochMs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_expenses_isDeleted_isPendingConfirmation_createdAtEpochMs` ON `${TABLE_NAME}` (`isDeleted`, `isPendingConfirmation`, `createdAtEpochMs`)"
+          },
+          {
+            "name": "index_expenses_isSynced",
+            "unique": false,
+            "columnNames": [
+              "isSynced"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_expenses_isSynced` ON `${TABLE_NAME}` (`isSynced`)"
+          },
+          {
+            "name": "index_expenses_dedupSignature_createdAtEpochMs",
+            "unique": false,
+            "columnNames": [
+              "dedupSignature",
+              "createdAtEpochMs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_expenses_dedupSignature_createdAtEpochMs` ON `${TABLE_NAME}` (`dedupSignature`, `createdAtEpochMs`)"
+          },
+          {
+            "name": "index_expenses_splitGroupId",
+            "unique": false,
+            "columnNames": [
+              "splitGroupId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_expenses_splitGroupId` ON `${TABLE_NAME}` (`splitGroupId`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "recurring_payments",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `title` TEXT NOT NULL, `amountRub` REAL NOT NULL, `categoryId` TEXT NOT NULL, `operationType` TEXT NOT NULL, `dayOfMonth` INTEGER NOT NULL, `autoCreateInFeed` INTEGER NOT NULL, `lastPaidPeriodKey` TEXT NOT NULL, `isActive` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "amountRub",
+            "columnName": "amountRub",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "categoryId",
+            "columnName": "categoryId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "operationType",
+            "columnName": "operationType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dayOfMonth",
+            "columnName": "dayOfMonth",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "autoCreateInFeed",
+            "columnName": "autoCreateInFeed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastPaidPeriodKey",
+            "columnName": "lastPaidPeriodKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isActive",
+            "columnName": "isActive",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMs",
+            "columnName": "updatedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "savings_goals",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `title` TEXT NOT NULL, `emoji` TEXT NOT NULL, `targetAmountRub` REAL NOT NULL, `initialAmountRub` REAL NOT NULL, `isArchived` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "emoji",
+            "columnName": "emoji",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetAmountRub",
+            "columnName": "targetAmountRub",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "initialAmountRub",
+            "columnName": "initialAmountRub",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isArchived",
+            "columnName": "isArchived",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDeleted",
+            "columnName": "isDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAtEpochMs",
+            "columnName": "updatedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '6360964d7745877960b1c0ad4d3f3dd0')"
+    ]
+  }
+}

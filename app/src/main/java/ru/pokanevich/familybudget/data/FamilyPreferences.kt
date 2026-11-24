@@ -112,6 +112,16 @@ class FamilyPreferences(context: Context) : PinLockStorage {
         get() = safeGetString("user_name", defaultUserName)
         set(value) = prefs.edit().putString("user_name", value).apply()
 
+    /** Устойчивый локальный идентификатор установки устройства для дедупликации общей карты. */
+    val deviceInstallationId: String
+        get() {
+            val existing = safeGetString(KEY_DEVICE_INSTALLATION_ID, "").trim()
+            if (existing.isNotEmpty()) return existing
+            val generated = java.util.UUID.randomUUID().toString()
+            prefs.edit().putString(KEY_DEVICE_INSTALLATION_ID, generated).apply()
+            return generated
+        }
+
     var familySpaceCode: String
         get() = safeGetString("family_space_code", defaultFamilySpaceCode)
         set(value) = prefs.edit().putString("family_space_code", value.trim().uppercase()).apply()
@@ -326,6 +336,7 @@ class FamilyPreferences(context: Context) : PinLockStorage {
         private const val KEY_PIN_HASH_HEX = "pin_hash_hex"
         private const val KEY_PIN_AUTO_LOCK_TIMEOUT_MS = "pin_auto_lock_timeout_ms"
         private const val KEY_HIDE_AMOUNTS_ON_WIDGET = "hide_amounts_on_widget"
+        private const val KEY_DEVICE_INSTALLATION_ID = "device_installation_id"
 
         val defaultFamilySpaceCode: String
             get() = BuildConfig.DEFAULT_FAMILY_SPACE_CODE.trim().ifBlank { "POKANE-FAMILY" }

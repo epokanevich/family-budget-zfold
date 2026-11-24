@@ -43,7 +43,8 @@ object SplitExpenseBuilder {
         note: String,
         sourceType: String = "MANUAL",
         nowEpochMs: Long = System.currentTimeMillis(),
-        splitGroupId: String = UUID.randomUUID().toString()
+        splitGroupId: String = UUID.randomUUID().toString(),
+        originDeviceId: String = original?.originDeviceId.orEmpty()
     ): List<ExpenseEntity> {
         require(parts.size >= 2) { "Для разделения чека нужно минимум 2 части" }
         require(totalAmountRub.isFinite() && totalAmountRub > 0.0) {
@@ -83,7 +84,8 @@ object SplitExpenseBuilder {
                 dedupSignature = if (isFirstOfOriginal) original!!.dedupSignature else "",
                 note = partNote,
                 splitGroupId = splitGroupId,
-                operationType = OperationType.EXPENSE.name
+                operationType = OperationType.EXPENSE.name,
+                originDeviceId = originDeviceId
             )
         }
     }

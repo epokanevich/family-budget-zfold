@@ -27,6 +27,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
+import kotlin.math.roundToLong
 
 enum class SyncState(val label: String) {
     OFFLINE_READY("Локальная БД активна (офлайн)"),
@@ -865,9 +866,11 @@ class BudgetRepository private constructor(context: Context) {
 
     suspend fun addOrUpdateExpense(expense: ExpenseEntity) {
         val now = maxOf(System.currentTimeMillis(), expense.updatedAtEpochMs + 1L)
+        val effectiveDeviceId = expense.originDeviceId.ifBlank { prefs.deviceInstallationId }
         val toSave = expense.copy(
             updatedAtEpochMs = now,
-            isSynced = false
+            isSynced = false,
+            originDeviceId = effectiveDeviceId
         )
         dao.upsert(toSave)
         BudgetWidgetProvider.requestUpdate(appContext)
@@ -890,7 +893,9 @@ class BudgetRepository private constructor(context: Context) {
             merchant = merchant,
             authorName = authorName,
             note = note,
-            sourceType = sourceType
+            sourceType = sourceType,
+            originDeviceId = original?.originDeviceId?.ifBlank { prefs.deviceInstallationId }
+                ?: prefs.deviceInstallationId
         )
         db.withTransaction {
             dao.upsertAll(entities)
@@ -1143,7 +1148,8 @@ class BudgetRepository private constructor(context: Context) {
             updatedAtEpochMs = now,
             note = note.trim(),
             operationType = OperationType.TRANSFER.name,
-            goalId = goal.id
+            goalId = goal.id,
+            originDeviceId = prefs.deviceInstallationId
         )
         addOrUpdateExpense(transfer)
     }
@@ -1321,7 +1327,8 @@ class BudgetRepository private constructor(context: Context) {
                 updatedAtEpochMs = now,
                 rawPushOrQrText = rawText,
                 dedupSignature = signature,
-                operationType = storedOperationType
+                operationType = storedOperationType,
+                originDeviceId = prefs.deviceInstallationId
             )
             dao.upsert(expense)
             true
@@ -1336,8 +1343,8 @@ class BudgetRepository private constructor(context: Context) {
         internal const val FOREGROUND_POLL_INTERVAL_MS = 15_000L
         internal const val BACKGROUND_POLL_INTERVAL_MS = 180_000L
 
-        /** Окно кросс-девайс дедупа Mir Pay ↔ Сбер; должно быть >= STALE_NOTIFICATION_MS сервиса (90 сек). */
-        internal const val CROSS_DEVICE_DEDUP_WINDOW_MS = 90_000L
+        /** Окно кросс-девайс дедупа общей карты (Mir Pay ↔ Банк или Банк ↔ Банк с двух телефонов): ±3 минуты. */
+        internal const val CROSS_DEVICE_DEDUP_WINDOW_MS = 180_000L
 
         /**
          * Окно дедупа пушей на одном устройстве (>= 5 минут, покрывает допустимый дрифт
@@ -1371,8 +1378,15 @@ class BudgetRepository private constructor(context: Context) {
             )
         }
 
-        internal fun buildAmountSignature(amountRub: Double): String =
-            "AMT_" + String.format(java.util.Locale.US, "%.2f", amountRub)
+        internal fun amountToKopecks(amountRub: Double): Long =
+            if (amountRub.isFinite()) (amountRub * 100.0).roundToLong() else 0L
+
+        internal fun buildAmountSignature(amountRub: Double): String {
+            val kopecks = amountToKopecks(amountRub)
+            val absKopecks = abs(kopecks)
+            val sign = if (kopecks < 0L) "-" else ""
+            return "AMT_${sign}${absKopecks / 100L}.${String.format(java.util.Locale.US, "%02d", absKopecks % 100L)}"
+        }
 
         private fun isBankPushSource(sourceType: String): Boolean =
             sourceType.startsWith("PUSH_")
@@ -1479,12 +1493,14 @@ class BudgetRepository private constructor(context: Context) {
                 }
             }
 
-            val dedupedLosers = deduplicateCrossDevicePushExpenses(mergedMap, nowMs)
-            if (dedupedLosers.isNotEmpty()) {
-                val loserIds = dedupedLosers.map { it.id }.toSet()
-                toUpsertLocally.removeAll { it.id in loserIds }
-                toUpsertLocally.addAll(dedupedLosers)
-                dedupedLosers.forEach { pushedVersions[it.id] = it.updatedAtEpochMs }
+            val dedupResult = deduplicateCrossDevicePushExpensesWithEnrichment(mergedMap, nowMs)
+            val dedupedLosers = dedupResult.losers
+            val changedByDedup = dedupResult.losers + dedupResult.enrichedWinners
+            if (changedByDedup.isNotEmpty()) {
+                val changedIds = changedByDedup.map { it.id }.toSet()
+                toUpsertLocally.removeAll { it.id in changedIds }
+                toUpsertLocally.addAll(changedByDedup)
+                changedByDedup.forEach { pushedVersions[it.id] = it.updatedAtEpochMs }
                 needCloudPush = true
             }
 
@@ -1497,34 +1513,121 @@ class BudgetRepository private constructor(context: Context) {
             )
         }
 
+        internal data class CrossDeviceDedupResult(
+            val losers: List<ExpenseEntity>,
+            val enrichedWinners: List<ExpenseEntity>
+        )
+
+        private val CARD_LAST4_IN_RAW_REGEX = Regex(
+            "(?:[•*·]+\\s*)+(\\d{4})\\b|\\b(?:карт[аеыу]?|сч[её]т[ау]?|mir|мир|visa|mastercard)\\s*[•*·-]*\\s*(\\d{4})\\b",
+            RegexOption.IGNORE_CASE
+        )
+
+        private fun extractCardLast4(rawText: String): String? {
+            if (rawText.isBlank()) return null
+            val m = CARD_LAST4_IN_RAW_REGEX.find(rawText) ?: return null
+            return m.groupValues[1].ifBlank { m.groupValues[2] }.takeIf { it.length == 4 }
+        }
+
+        private fun isCrossDeviceOrigin(first: ExpenseEntity, second: ExpenseEntity): Boolean {
+            val idA = first.originDeviceId.trim()
+            val idB = second.originDeviceId.trim()
+            if (idA.isNotEmpty() && idB.isNotEmpty()) {
+                return idA != idB
+            }
+            val authorA = first.authorName.trim()
+            val authorB = second.authorName.trim()
+            return authorA.isNotEmpty() && authorB.isNotEmpty() && !authorA.equals(authorB, ignoreCase = true)
+        }
+
+        private fun canPairAsCrossDeviceDuplicate(first: ExpenseEntity, second: ExpenseEntity): Boolean {
+            val deltaMs = abs(second.createdAtEpochMs - first.createdAtEpochMs)
+            if (deltaMs > CROSS_DEVICE_DEDUP_WINDOW_MS) return false
+
+            if (first.sourceType != second.sourceType) {
+                val hasMirPayPair = first.sourceType == "PUSH_MIRPAY" || second.sourceType == "PUSH_MIRPAY"
+                if (!hasMirPayPair) return false
+                return MerchantMatcher.areCompatible(first.merchant, second.merchant)
+            }
+
+            // Одинаковый банковский канал (например, PUSH_SBER + PUSH_SBER по общей карте):
+            // склеиваем только если записи точно пришли с разных устройств/авторов.
+            if (!isCrossDeviceOrigin(first, second)) return false
+            if (!MerchantMatcher.areCompatible(first.merchant, second.merchant)) return false
+
+            if (MerchantMatcher.isGenericMerchant(first.merchant) &&
+                MerchantMatcher.isGenericMerchant(second.merchant)
+            ) {
+                val cardA = extractCardLast4(first.rawPushOrQrText)
+                val cardB = extractCardLast4(second.rawPushOrQrText)
+                return when {
+                    cardA != null && cardB != null -> cardA == cardB
+                    else -> deltaMs <= 60_000L
+                }
+            }
+            return true
+        }
+
+        private fun shouldFirstWinCrossDevice(first: ExpenseEntity, second: ExpenseEntity): Boolean {
+            if (first.isPendingConfirmation != second.isPendingConfirmation) {
+                return !first.isPendingConfirmation
+            }
+            if (first.sourceType != second.sourceType) {
+                val firstMirPay = first.sourceType == "PUSH_MIRPAY"
+                val secondMirPay = second.sourceType == "PUSH_MIRPAY"
+                if (firstMirPay != secondMirPay) return firstMirPay
+            }
+            val firstSpecificMerchant = !MerchantMatcher.isGenericMerchant(first.merchant)
+            val secondSpecificMerchant = !MerchantMatcher.isGenericMerchant(second.merchant)
+            if (firstSpecificMerchant != secondSpecificMerchant) {
+                return firstSpecificMerchant
+            }
+            val firstSpecificCat = first.categoryName != ExpenseCategory.OTHER.name
+            val secondSpecificCat = second.categoryName != ExpenseCategory.OTHER.name
+            if (firstSpecificCat != secondSpecificCat) {
+                return firstSpecificCat
+            }
+            if (first.createdAtEpochMs != second.createdAtEpochMs) {
+                return first.createdAtEpochMs < second.createdAtEpochMs
+            }
+            return first.id < second.id
+        }
+
         /**
-         * Кросс-девайс дедупликация: если на одном телефоне сработал Mir Pay (`PUSH_MIRPAY`),
-         * а на другом по привязанной карте пришёл пуш любого банка (`PUSH_SBER`, `PUSH_TBANK`, `PUSH_ALFA`,
-         * `PUSH_VTB`, `PUSH_OZON` и др. `PUSH_*`) в пределах 90 сек на ту же сумму и у совместимого
-         * мерчанта (Пятёрочка / PYATEROCHKA, либо один из них шаблонный), оставляем одну запись
-         * (приоритет: подтверждённая, затем `PUSH_MIRPAY`), а вторую мягко удаляем (`isDeleted = true`).
-         *
-         * Losers возвращаются с isSynced = false: в isSynced = true они переводятся только
-         * после успешного PUT, иначе при сбое удаление никогда не дошло бы до облака.
+         * Кросс-девайсная дедупликация общей карты («Я + Жена»):
+         * - сравнивает операции в копейках (`amountToKopecks`) и по `effectiveOperationType`;
+         * - объединяет пары `PUSH_MIRPAY` ↔ `PUSH_<BANK>`, а также одинаковый канал `PUSH_<BANK>` ↔ `PUSH_<BANK>`
+         *   с двух разных устройств/авторов в пределах [CROSS_DEVICE_DEDUP_WINDOW_MS] (3 мин);
+         * - детерминированно выбирает победителя и обогащает шаблонный мерчант/категорию победителя
+         *   метаданными проигравшей записи; проигравшая запись мягко удаляется (`isDeleted = true`, `isSynced = false`).
          */
         internal fun deduplicateCrossDevicePushExpenses(
             mergedMap: MutableMap<String, ExpenseEntity>,
             nowMs: Long = System.currentTimeMillis()
-        ): List<ExpenseEntity> {
-            val candidatesBySig = mergedMap.values
+        ): List<ExpenseEntity> = deduplicateCrossDevicePushExpensesWithEnrichment(mergedMap, nowMs).losers
+
+        internal fun deduplicateCrossDevicePushExpensesWithEnrichment(
+            mergedMap: MutableMap<String, ExpenseEntity>,
+            nowMs: Long = System.currentTimeMillis()
+        ): CrossDeviceDedupResult {
+            val candidatesByKey = mergedMap.values
                 .filter {
                     !it.isDeleted &&
-                        it.dedupSignature.startsWith("AMT_") &&
-                        isBankPushSource(it.sourceType)
+                        isBankPushSource(it.sourceType) &&
+                        amountToKopecks(it.amountRub) > 0L
                 }
-                .groupBy { it.dedupSignature }
+                .groupBy { amountToKopecks(it.amountRub) to it.effectiveOperationType }
 
             val deletedLosers = mutableListOf<ExpenseEntity>()
-            for ((_, group) in candidatesBySig) {
+            val enrichedWinnersById = linkedMapOf<String, ExpenseEntity>()
+
+            for ((_, group) in candidatesByKey) {
                 if (group.size < 2) continue
-                val sorted = group.sortedBy { it.createdAtEpochMs }
+                val sorted = group.sortedWith(
+                    compareBy<ExpenseEntity> { it.createdAtEpochMs }.thenBy { it.id }
+                )
                 for (i in sorted.indices) {
-                    val first = mergedMap[sorted[i].id] ?: continue
+                    var first = mergedMap[sorted[i].id] ?: continue
                     if (first.isDeleted) continue
                     for (j in (i + 1) until sorted.size) {
                         val second = mergedMap[sorted[j].id] ?: continue
@@ -1532,16 +1635,35 @@ class BudgetRepository private constructor(context: Context) {
                         if (second.createdAtEpochMs - first.createdAtEpochMs > CROSS_DEVICE_DEDUP_WINDOW_MS) {
                             break
                         }
-                        if (first.sourceType == second.sourceType) continue
-                        val hasMirPayPair = first.sourceType == "PUSH_MIRPAY" || second.sourceType == "PUSH_MIRPAY"
-                        if (!hasMirPayPair) continue
-                        if (!MerchantMatcher.areCompatible(first.merchant, second.merchant)) continue
+                        if (!canPairAsCrossDeviceDuplicate(first, second)) continue
 
-                        val firstWins = when {
-                            first.isPendingConfirmation != second.isPendingConfirmation -> !first.isPendingConfirmation
-                            else -> first.sourceType == "PUSH_MIRPAY"
-                        }
+                        val firstWins = shouldFirstWinCrossDevice(first, second)
+                        var winner = if (firstWins) first else second
                         val loser = if (firstWins) second else first
+
+                        val needsMerchantEnrichment = MerchantMatcher.isGenericMerchant(winner.merchant) &&
+                            !MerchantMatcher.isGenericMerchant(loser.merchant)
+                        val needsCategoryEnrichment = winner.categoryName == ExpenseCategory.OTHER.name &&
+                            loser.categoryName != ExpenseCategory.OTHER.name &&
+                            !winner.isIncome &&
+                            !winner.isTransfer
+                        val needsNoteEnrichment = winner.note.isBlank() && loser.note.isNotBlank()
+
+                        if (needsMerchantEnrichment || needsCategoryEnrichment || needsNoteEnrichment) {
+                            winner = winner.copy(
+                                merchant = if (needsMerchantEnrichment) loser.merchant else winner.merchant,
+                                categoryName = if (needsCategoryEnrichment) loser.categoryName else winner.categoryName,
+                                note = if (needsNoteEnrichment) loser.note else winner.note,
+                                updatedAtEpochMs = maxOf(nowMs, winner.updatedAtEpochMs + 1L),
+                                isSynced = false
+                            )
+                            mergedMap[winner.id] = winner
+                            enrichedWinnersById[winner.id] = winner
+                            if (firstWins) {
+                                first = winner
+                            }
+                        }
+
                         val updatedLoser = loser.copy(
                             isDeleted = true,
                             updatedAtEpochMs = maxOf(nowMs, loser.updatedAtEpochMs + 1L),
@@ -1553,7 +1675,10 @@ class BudgetRepository private constructor(context: Context) {
                     }
                 }
             }
-            return deletedLosers
+            return CrossDeviceDedupResult(
+                losers = deletedLosers,
+                enrichedWinners = enrichedWinnersById.values.toList()
+            )
         }
 
         @Volatile

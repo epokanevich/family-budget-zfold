@@ -323,4 +323,19 @@ class ExpenseEntityJsonTest {
         assertEquals(customId, restored!!.categoryName)
         assertEquals(OperationType.EXPENSE, restored.effectiveOperationType)
     }
+
+    @Test
+    fun roundTrip_originDeviceId_preservedAndOmittedWhenEmpty() {
+        val withDevice = ExpenseEntity(
+            id = "dev-1",
+            amountRub = 500.0,
+            originDeviceId = "install-uuid-1234"
+        )
+        val json = withDevice.toJsonObject()
+        assertEquals("install-uuid-1234", json.getString("originDeviceId"))
+        assertEquals("install-uuid-1234", ExpenseEntity.fromJsonObject(json)?.originDeviceId)
+
+        val withoutDevice = ExpenseEntity(id = "dev-2", amountRub = 500.0)
+        assertFalse(withoutDevice.toJsonObject().has("originDeviceId"))
+    }
 }

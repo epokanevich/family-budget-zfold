@@ -21,18 +21,24 @@ class CrossDevicePushDedupTest {
         offsetMs: Long = 0L,
         pending: Boolean = true,
         synced: Boolean = true,
-        author: String = "Евгений"
+        author: String = "Евгений",
+        originDeviceId: String = "",
+        categoryName: String = "OTHER",
+        rawText: String = ""
     ) = ExpenseEntity(
         id = id,
         amountRub = amount,
         merchant = merchant,
+        categoryName = categoryName,
         authorName = author,
         sourceType = source,
         isPendingConfirmation = pending,
         isSynced = synced,
         createdAtEpochMs = baseTime + offsetMs,
         updatedAtEpochMs = baseTime + offsetMs,
-        dedupSignature = BudgetRepository.buildAmountSignature(amount)
+        rawPushOrQrText = rawText,
+        dedupSignature = BudgetRepository.buildAmountSignature(amount),
+        originDeviceId = originDeviceId
     )
 
     @Test
@@ -130,16 +136,100 @@ class CrossDevicePushDedupTest {
     }
 
     @Test
-    fun `mirpay and sber pushes more than 90s apart are both kept`() {
+    fun `mirpay and sber pushes more than 180s apart are both kept`() {
         val mirPay = push("mirpay-old", 300.0, "PUSH_MIRPAY")
-        val sber = push("sber-new", 300.0, "PUSH_SBER", offsetMs = 95_000L)
+        val sber = push("sber-new", 300.0, "PUSH_SBER", offsetMs = 185_000L)
         val map = mutableMapOf(mirPay.id to mirPay, sber.id to sber)
 
-        val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 100_000L)
+        val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 200_000L)
 
         assertTrue(losers.isEmpty())
         assertFalse(map.getValue("mirpay-old").isDeleted)
         assertFalse(map.getValue("sber-new").isDeleted)
+    }
+
+    @Test
+    fun `shared card sber pushes from two phones within 180s are deduplicated`() {
+        val eugeneSber = push(
+            id = "sber-eugene",
+            amount = 1034.33,
+            source = "PUSH_SBER",
+            merchant = "Пятёрочка",
+            offsetMs = 0L,
+            author = "Евгений",
+            originDeviceId = "device-fold-eugene",
+            categoryName = "GROCERIES"
+        )
+        val wifeSber = push(
+            id = "sber-wife",
+            amount = 1034.33,
+            source = "PUSH_SBER",
+            merchant = "PYATEROCHKA 2154",
+            offsetMs = 120_000L,
+            author = "Анжелика",
+            originDeviceId = "device-phone-wife",
+            categoryName = "OTHER"
+        )
+        val map = mutableMapOf(eugeneSber.id to eugeneSber, wifeSber.id to wifeSber)
+
+        val losers = BudgetRepository.deduplicateCrossDevicePushExpenses(map, nowMs = baseTime + 150_000L)
+
+        assertEquals(listOf("sber-wife"), losers.map { it.id })
+        assertTrue(map.getValue("sber-wife").isDeleted)
+        assertFalse(map.getValue("sber-eugene").isDeleted)
+    }
+
+    @Test
+    fun `shared card dedup enriches generic mirpay winner with sber merchant and category`() {
+        val mirPayGeneric = push(
+            id = "mirpay-gen",
+            amount = 767.0,
+            source = "PUSH_MIRPAY",
+            merchant = "Оплата через Mir Pay",
+            author = "Анжелика",
+            originDeviceId = "device-wife",
+            categoryName = "OTHER"
+        )
+        val sberRich = push(
+            id = "sber-rich",
+            amount = 767.0,
+            source = "PUSH_SBER",
+            merchant = "ВкусВилл",
+            offsetMs = 8_000L,
+            author = "Евгений",
+            originDeviceId = "device-eugene",
+            categoryName = "GROCERIES"
+        )
+
+        val plan = BudgetRepository.buildSyncMergePlan(
+            localList = listOf(mirPayGeneric),
+            remoteMap = mapOf(sberRich.id to sberRich),
+            remoteExists = true,
+            nowMs = baseTime + 20_000L
+        )
+
+        assertEquals(listOf("sber-rich"), plan.dedupedLosers.map { it.id })
+        val winner = plan.mergedMap.getValue("mirpay-gen")
+        assertFalse(winner.isDeleted)
+        assertEquals("ВкусВилл", winner.merchant)
+        assertEquals("GROCERIES", winner.categoryName)
+        assertTrue(plan.toUpsertLocally.any { it.id == "mirpay-gen" && it.merchant == "ВкусВилл" })
+        assertNotNull(plan.pushedVersions["mirpay-gen"])
+    }
+
+    @Test
+    fun `shared card dedup handles double epsilon drift and is order independent`() {
+        val a = push("id-a", 199.0000001, "PUSH_SBER", merchant = "Берёза у дома", author = "Евгений", originDeviceId = "dev-1")
+        val b = push("id-b", 198.9999999, "PUSH_SBER", merchant = "Берёза у дома", offsetMs = 15_000L, author = "Анжелика", originDeviceId = "dev-2")
+
+        val mapAB = linkedMapOf(a.id to a, b.id to b)
+        val mapBA = linkedMapOf(b.id to b, a.id to a)
+
+        val losersAB = BudgetRepository.deduplicateCrossDevicePushExpenses(mapAB, nowMs = baseTime + 30_000L)
+        val losersBA = BudgetRepository.deduplicateCrossDevicePushExpenses(mapBA, nowMs = baseTime + 30_000L)
+
+        assertEquals(losersAB.map { it.id }, losersBA.map { it.id })
+        assertEquals(1, losersAB.size)
     }
 
     // ---------- Полный цикл синка: неудачный PUT не приводит к повторному удалению ----------
