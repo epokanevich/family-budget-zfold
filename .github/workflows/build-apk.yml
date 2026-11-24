@@ -1,6 +1,6 @@
-name: Build FamilyBudget APK
+name: Build FamilyBudget APKs (Family & Grandma)
 
-run-name: Build APK (${{ inputs.default_user_name || 'Eugene' }} / ${{ inputs.default_family_code || 'POKANE-FAMILY' }})
+run-name: Build APKs (${{ inputs.default_user_name || 'Eugene' }} / ${{ inputs.default_family_code || 'POKANE-FAMILY' }})
 
 on:
   push:
@@ -8,16 +8,15 @@ on:
   workflow_dispatch:
     inputs:
       default_family_code:
-        description: 'Default familySpaceCode (empty = POKANE-FAMILY)'
+        description: 'Default familySpaceCode for family flavor (empty = POKANE-FAMILY)'
         required: false
         default: ''
       default_user_name:
-        description: 'Default userName (empty = Евгений)'
+        description: 'Default userName for family flavor (empty = Евгений)'
         required: false
         default: ''
 
-# APK больше не публикуется в GitHub Releases (в нём зашиты токены синка/Gemini),
-# поэтому workflow достаточно только чтения содержимого репозитория.
+# APK не публикуется в GitHub Releases; workflow достаточно чтения репозитория.
 permissions:
   contents: read
 
@@ -43,8 +42,8 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Run Unit Tests
-        run: gradle testDebugUnitTest --stacktrace
+      - name: Run Unit Tests (Family & Grandma Flavors)
+        run: gradle testFamilyDebugUnitTest testGrandmaDebugUnitTest --stacktrace
 
       - name: Verify Room schema export
         run: |
@@ -59,8 +58,6 @@ jobs:
             exit 0
           fi
           echo "::warning::Room schema changed but is not committed: $CHANGED"
-          # Сборка идёт только в CI (без локального Android Studio), поэтому отдаём
-          # сгенерированную схему через аннотации (base64, частями), чтобы её можно было закоммитить.
           for f in $CHANGED; do
             echo "----- $f -----"
             cat "$f"
@@ -82,20 +79,27 @@ jobs:
             echo "KEYSTORE_BASE64 secret not set, falling back to debug signing"
           fi
 
-      - name: Build Release APK (R8 Minified & Optimized for Z Fold 4/5)
+      - name: Build Release APKs (Family & Grandma Flavors)
         env:
           SYNC_GITHUB_TOKEN: ${{ secrets.SYNC_GITHUB_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_APP_ID_FAMILY: ${{ secrets.FIREBASE_APP_ID_FAMILY }}
+          FIREBASE_APP_ID_GRANDMA: ${{ secrets.FIREBASE_APP_ID_GRANDMA }}
+          FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
           DEFAULT_FAMILY_SPACE_CODE: ${{ inputs.default_family_code }}
           DEFAULT_USER_NAME: ${{ inputs.default_user_name }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: gradle assembleRelease --stacktrace
+        run: gradle assembleFamilyRelease assembleGrandmaRelease --stacktrace
 
-      - name: Upload APK Artifact
+      - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: FamilyBudget-ZFold-APK
-          path: app/build/outputs/apk/release/app-release.apk
+          name: FamilyBudget-Dual-APKs
+          path: |
+            app/build/outputs/apk/family/release/*.apk
+            app/build/outputs/apk/grandma/release/*.apk
           if-no-files-found: error

@@ -28,7 +28,8 @@ data class FirebaseBuildConfigData(
 @Suppress("UNCHECKED_CAST")
 fun resolveFirebaseConfig(
     candidateFiles: List<File>,
-    targetPackage: String
+    targetPackage: String,
+    envAppIdVar: String = "FIREBASE_APP_ID"
 ): FirebaseBuildConfigData {
     val file = candidateFiles.firstOrNull { it.isFile && it.length() > 0L }
     if (file != null) {
@@ -57,9 +58,11 @@ fun resolveFirebaseConfig(
             }
         }
     }
+    val envAppId = System.getenv(envAppIdVar)?.takeIf { it.isNotBlank() }
+        ?: System.getenv("FIREBASE_APP_ID")
     return FirebaseBuildConfigData(
         projectId = escapeForBuildConfig(System.getenv("FIREBASE_PROJECT_ID")),
-        appId = escapeForBuildConfig(System.getenv("FIREBASE_APP_ID")),
+        appId = escapeForBuildConfig(envAppId),
         apiKey = escapeForBuildConfig(System.getenv("FIREBASE_API_KEY")),
         storageBucket = escapeForBuildConfig(System.getenv("FIREBASE_STORAGE_BUCKET"))
     )
@@ -83,34 +86,63 @@ android {
 
         val syncToken = escapeForBuildConfig(System.getenv("SYNC_GITHUB_TOKEN"))
         val geminiApiKey = escapeForBuildConfig(System.getenv("GEMINI_API_KEY"))
-        val defaultFamilyCode = escapeForBuildConfig(System.getenv("DEFAULT_FAMILY_SPACE_CODE"))
-            .ifBlank { "POKANE-FAMILY" }
-        val defaultUserName = escapeForBuildConfig(System.getenv("DEFAULT_USER_NAME"))
-            .ifBlank { "Евгений" }
-        val isSoloProfile = defaultUserName !in setOf("Евгений", "Анжелика")
         buildConfigField("String", "DEFAULT_SYNC_TOKEN", "\"$syncToken\"")
         buildConfigField("String", "DEFAULT_GEMINI_API_KEY", "\"$geminiApiKey\"")
-        buildConfigField("String", "DEFAULT_FAMILY_SPACE_CODE", "\"$defaultFamilyCode\"")
-        buildConfigField("String", "DEFAULT_USER_NAME", "\"$defaultUserName\"")
-        buildConfigField("Boolean", "IS_SOLO_BUDGET_PROFILE", isSoloProfile.toString())
-        buildConfigField("Boolean", "IS_SPACE_CODE_LOCKED", "false")
-        buildConfigField("Double", "DEFAULT_MONTHLY_BUDGET_RUB", "200000.0")
-        buildConfigField("String", "SYNC_CONTOUR", "\"FAMILY\"")
-
-        val defaultFirebase = resolveFirebaseConfig(
-            candidateFiles = listOf(
-                file("src/family/google-services.json"),
-                file("google-services.json")
-            ),
-            targetPackage = "ru.pokanevich.familybudget"
-        )
-        buildConfigField("String", "FIREBASE_PROJECT_ID", "\"${defaultFirebase.projectId}\"")
-        buildConfigField("String", "FIREBASE_APP_ID", "\"${defaultFirebase.appId}\"")
-        buildConfigField("String", "FIREBASE_API_KEY", "\"${defaultFirebase.apiKey}\"")
-        buildConfigField("String", "FIREBASE_STORAGE_BUCKET", "\"${defaultFirebase.storageBucket}\"")
 
         vectorDrawables {
             useSupportLibrary = true
+        }
+    }
+
+    flavorDimensions += "profile"
+    productFlavors {
+        create("family") {
+            dimension = "profile"
+            val defaultFamilyCode = escapeForBuildConfig(System.getenv("DEFAULT_FAMILY_SPACE_CODE"))
+                .ifBlank { "POKANE-FAMILY" }
+            val defaultUserName = escapeForBuildConfig(System.getenv("DEFAULT_USER_NAME"))
+                .ifBlank { "Евгений" }
+            val fb = resolveFirebaseConfig(
+                candidateFiles = listOf(
+                    file("src/family/google-services.json"),
+                    file("google-services.json")
+                ),
+                targetPackage = "ru.pokanevich.familybudget",
+                envAppIdVar = "FIREBASE_APP_ID_FAMILY"
+            )
+            buildConfigField("String", "SYNC_CONTOUR", "\"FAMILY\"")
+            buildConfigField("String", "DEFAULT_FAMILY_SPACE_CODE", "\"$defaultFamilyCode\"")
+            buildConfigField("String", "DEFAULT_USER_NAME", "\"$defaultUserName\"")
+            buildConfigField("Boolean", "IS_SOLO_BUDGET_PROFILE", "false")
+            buildConfigField("Boolean", "IS_SPACE_CODE_LOCKED", "false")
+            buildConfigField("Double", "DEFAULT_MONTHLY_BUDGET_RUB", "200000.0")
+            buildConfigField("String", "FIREBASE_PROJECT_ID", "\"${fb.projectId}\"")
+            buildConfigField("String", "FIREBASE_APP_ID", "\"${fb.appId}\"")
+            buildConfigField("String", "FIREBASE_API_KEY", "\"${fb.apiKey}\"")
+            buildConfigField("String", "FIREBASE_STORAGE_BUCKET", "\"${fb.storageBucket}\"")
+        }
+
+        create("grandma") {
+            dimension = "profile"
+            applicationIdSuffix = ".grandma"
+            val fb = resolveFirebaseConfig(
+                candidateFiles = listOf(
+                    file("src/grandma/google-services.json"),
+                    file("google-services.json")
+                ),
+                targetPackage = "ru.pokanevich.familybudget.grandma",
+                envAppIdVar = "FIREBASE_APP_ID_GRANDMA"
+            )
+            buildConfigField("String", "SYNC_CONTOUR", "\"GRANDMA_SOLO\"")
+            buildConfigField("String", "DEFAULT_FAMILY_SPACE_CODE", "\"GRANDMA-SOLO\"")
+            buildConfigField("String", "DEFAULT_USER_NAME", "\"Бабушка\"")
+            buildConfigField("Boolean", "IS_SOLO_BUDGET_PROFILE", "true")
+            buildConfigField("Boolean", "IS_SPACE_CODE_LOCKED", "true")
+            buildConfigField("Double", "DEFAULT_MONTHLY_BUDGET_RUB", "50000.0")
+            buildConfigField("String", "FIREBASE_PROJECT_ID", "\"${fb.projectId}\"")
+            buildConfigField("String", "FIREBASE_APP_ID", "\"${fb.appId}\"")
+            buildConfigField("String", "FIREBASE_API_KEY", "\"${fb.apiKey}\"")
+            buildConfigField("String", "FIREBASE_STORAGE_BUCKET", "\"${fb.storageBucket}\"")
         }
     }
 

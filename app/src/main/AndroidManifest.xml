@@ -48,7 +48,7 @@
         <receiver
             android:name=".widget.BudgetWidgetProvider"
             android:exported="true"
-            android:label="Семейный бюджет">
+            android:label="@string/app_name">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
