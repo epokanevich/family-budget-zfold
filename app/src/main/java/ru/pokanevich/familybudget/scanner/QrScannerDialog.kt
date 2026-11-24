@@ -151,6 +151,7 @@ fun QrScannerDialog(
 
                                     var handled = false
                                     analysis.setAnalyzer(executor) { imageProxy ->
+                                        @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
                                         val mediaImage = imageProxy.image
                                         if (mediaImage != null && !handled) {
                                             val image = InputImage.fromMediaImage(
