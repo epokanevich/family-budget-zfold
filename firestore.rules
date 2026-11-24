@@ -1,0 +1,431 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model (Project: budgetapp-9033d)
+// ===============================================================
+//
+// 1. Legacy Web App ("Мой бюджет") — preserved verbatim:
+//    - /artifacts/{appId}/users/{userId}/settings/profile
+//    - /artifacts/{appId}/public/data/{collectionId}/{document=**}
+//
+// 2. Android ZFold Family Contour: /zfold_family_spaces/{spaceKey}
+//    (expectedContour = 'FAMILY')
+// 3. Android ZFold Grandma Solo Contour: /zfold_grandma_spaces/{spaceKey}
+//    (expectedContour = 'GRANDMA_SOLO', forbids spaceKey == 'POKANE-FAMILY')
+//
+//    Each contour isolates its own subcollections:
+//    - /members/{uid}:
+//        uid: string (== request.auth.uid)
+//        contour: string (== 'FAMILY' or 'GRANDMA_SOLO')
+//        deviceId: string (<= 128)
+//        updatedAtEpochMs: int (>= 0)
+//    - /meta/config (docId == 'config'):
+//        schemaVersion: int (>= 1)
+//        monthlyBudgetRub: number (0..1000000000)
+//        budgetUpdatedAtEpochMs: int (>= 0)
+//        categories: list (size <= 200)
+//        updatedAtEpochMs: int (>= 0, monotonic on update)
+//    - /expenses/{expenseId} (expenseId len 1..128):
+//        id: string (== expenseId)
+//        amountRub: number (> 0, <= 1000000000)
+//        merchant: string (<= 256)
+//        categoryName: string (<= 128)
+//        authorName: string (<= 128)
+//        sourceType: string (<= 64)
+//        isPendingConfirmation: bool
+//        isDeleted: bool
+//        createdAtEpochMs: int (>= 0)
+//        updatedAtEpochMs: int (>= 0, monotonic on update)
+//        rawPushOrQrText: string (<= 2000)
+//        dedupSignature: string (<= 128)
+//        note: string (<= 1000)
+//        operationType: string (<= 32)
+//        splitGroupId: string (<= 128)
+//        goalId: string (<= 128)
+//        originDeviceId: string (<= 128)
+//    - /recurring_payments/{paymentId} (paymentId len 1..128):
+//        id: string (== paymentId)
+//        title: string (<= 200)
+//        amountRub: number (> 0, <= 1000000000)
+//        categoryId: string (<= 128)
+//        operationType: string (<= 32)
+//        dayOfMonth: int (1..31)
+//        autoCreateInFeed: bool
+//        isActive: bool
+//        lastPaidPeriodKey: string (<= 16)
+//        isDeleted: bool
+//        updatedAtEpochMs: int (>= 0, monotonic on update)
+//    - /savings_goals/{goalId} (goalId len 1..128):
+//        id: string (== goalId)
+//        title: string (<= 200)
+//        emoji: string (<= 32)
+//        targetAmountRub: number (0..1000000000)
+//        initialAmountRub: number (0..1000000000)
+//        isArchived: bool
+//        isDeleted: bool
+//        updatedAtEpochMs: int (>= 0, monotonic on update)
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Web App ("Мой бюджет") — PRESERVED VERBATIM
+    // ===============================================================
+
+    // 1. Пользователь может читать и менять только свой собственный профиль
+    match /artifacts/{appId}/users/{userId}/settings/profile {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // 2. ЖЕЛЕЗНАЯ ЗАЩИТА: Доступ к спискам операций и метаданным (категориям)
+    // Проверяем, что имя запрашиваемой коллекции состоит из слова 'budget_' (или 'meta_') 
+    // и кода синхронизации, который записан в защищенном личном профиле пользователя.
+    match /artifacts/{appId}/public/data/{collectionId}/{document=**} {
+      allow read, write: if request.auth != null && 
+        (
+          collectionId == 'budget_' + get(/databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/settings/profile).data.syncCode
+          ||
+          collectionId == 'meta_' + get(/databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/settings/profile).data.syncCode
+        );
+    }
+
+    // ===============================================================
+    // Shared Helper Functions for Android ZFold Contours
+    // ===============================================================
+
+    function isAuthed() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthed() && request.auth.uid == userId;
+    }
+
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == request.auth.uid;
+    }
+
+    function uidNotModified() {
+      return !('uid' in request.resource.data) ||
+        request.resource.data.uid == resource.data.uid;
+    }
+
+    function hasExactKeys(d, keys) {
+      return d.keys().hasAll(keys) && d.keys().hasOnly(keys);
+    }
+
+    function isBoundedString(val, maxLen) {
+      return val is string && val.size() <= maxLen;
+    }
+
+    function isValidDocId(docId) {
+      return docId is string && docId.size() >= 1 && docId.size() <= 128;
+    }
+
+    function isValidSpaceKey(spaceKey) {
+      return spaceKey is string &&
+        spaceKey.size() >= 6 &&
+        spaceKey.size() <= 64 &&
+        spaceKey.matches('^[A-Za-z0-9_-]+$');
+    }
+
+    function isValidGrandmaSpaceKey(spaceKey) {
+      return isValidSpaceKey(spaceKey) && spaceKey != 'POKANE-FAMILY';
+    }
+
+    function isFamilyMember(spaceKey) {
+      return isAuthed() &&
+        isValidSpaceKey(spaceKey) &&
+        exists(/databases/$(database)/documents/zfold_family_spaces/$(spaceKey)/members/$(request.auth.uid));
+    }
+
+    function isGrandmaMember(spaceKey) {
+      return isAuthed() &&
+        isValidGrandmaSpaceKey(spaceKey) &&
+        exists(/databases/$(database)/documents/zfold_grandma_spaces/$(spaceKey)/members/$(request.auth.uid));
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function validMemberData(d, expectedContour) {
+      return hasExactKeys(d, ['uid', 'contour', 'deviceId', 'updatedAtEpochMs']) &&
+        d.uid is string &&
+        d.uid == request.auth.uid &&
+        d.contour is string &&
+        d.contour == expectedContour &&
+        isBoundedString(d.deviceId, 128) &&
+        d.updatedAtEpochMs is int &&
+        d.updatedAtEpochMs >= 0;
+    }
+
+    function validMetaConfig(d) {
+      return hasExactKeys(d, [
+          'schemaVersion',
+          'monthlyBudgetRub',
+          'budgetUpdatedAtEpochMs',
+          'categories',
+          'updatedAtEpochMs'
+        ]) &&
+        d.schemaVersion is int &&
+        d.schemaVersion >= 1 &&
+        d.monthlyBudgetRub is number &&
+        d.monthlyBudgetRub >= 0 &&
+        d.monthlyBudgetRub <= 1000000000 &&
+        d.budgetUpdatedAtEpochMs is int &&
+        d.budgetUpdatedAtEpochMs >= 0 &&
+        d.categories is list &&
+        d.categories.size() <= 200 &&
+        d.updatedAtEpochMs is int &&
+        d.updatedAtEpochMs >= 0;
+    }
+
+    function validExpenseDoc(d, expenseId) {
+      return hasExactKeys(d, [
+          'id',
+          'amountRub',
+          'merchant',
+          'categoryName',
+          'authorName',
+          'sourceType',
+          'isPendingConfirmation',
+          'isDeleted',
+          'createdAtEpochMs',
+          'updatedAtEpochMs',
+          'rawPushOrQrText',
+          'dedupSignature',
+          'note',
+          'operationType',
+          'splitGroupId',
+          'goalId',
+          'originDeviceId'
+        ]) &&
+        d.id is string &&
+        d.id == expenseId &&
+        d.amountRub is number &&
+        d.amountRub > 0 &&
+        d.amountRub <= 1000000000 &&
+        isBoundedString(d.merchant, 256) &&
+        isBoundedString(d.categoryName, 128) &&
+        isBoundedString(d.authorName, 128) &&
+        isBoundedString(d.sourceType, 64) &&
+        d.isPendingConfirmation is bool &&
+        d.isDeleted is bool &&
+        d.createdAtEpochMs is int &&
+        d.createdAtEpochMs >= 0 &&
+        d.updatedAtEpochMs is int &&
+        d.updatedAtEpochMs >= 0 &&
+        isBoundedString(d.rawPushOrQrText, 2000) &&
+        isBoundedString(d.dedupSignature, 128) &&
+        isBoundedString(d.note, 1000) &&
+        isBoundedString(d.operationType, 32) &&
+        isBoundedString(d.splitGroupId, 128) &&
+        isBoundedString(d.goalId, 128) &&
+        isBoundedString(d.originDeviceId, 128);
+    }
+
+    function validRecurringDoc(d, paymentId) {
+      return hasExactKeys(d, [
+          'id',
+          'title',
+          'amountRub',
+          'categoryId',
+          'operationType',
+          'dayOfMonth',
+          'autoCreateInFeed',
+          'isActive',
+          'lastPaidPeriodKey',
+          'isDeleted',
+          'updatedAtEpochMs'
+        ]) &&
+        d.id is string &&
+        d.id == paymentId &&
+        isBoundedString(d.title, 200) &&
+        d.amountRub is number &&
+        d.amountRub > 0 &&
+        d.amountRub <= 1000000000 &&
+        isBoundedString(d.categoryId, 128) &&
+        isBoundedString(d.operationType, 32) &&
+        d.dayOfMonth is int &&
+        d.dayOfMonth >= 1 &&
+        d.dayOfMonth <= 31 &&
+        d.autoCreateInFeed is bool &&
+        d.isActive is bool &&
+        isBoundedString(d.lastPaidPeriodKey, 16) &&
+        d.isDeleted is bool &&
+        d.updatedAtEpochMs is int &&
+        d.updatedAtEpochMs >= 0;
+    }
+
+    function validGoalDoc(d, goalId) {
+      return hasExactKeys(d, [
+          'id',
+          'title',
+          'emoji',
+          'targetAmountRub',
+          'initialAmountRub',
+          'isArchived',
+          'isDeleted',
+          'updatedAtEpochMs'
+        ]) &&
+        d.id is string &&
+        d.id == goalId &&
+        isBoundedString(d.title, 200) &&
+        isBoundedString(d.emoji, 32) &&
+        d.targetAmountRub is number &&
+        d.targetAmountRub >= 0 &&
+        d.targetAmountRub <= 1000000000 &&
+        d.initialAmountRub is number &&
+        d.initialAmountRub >= 0 &&
+        d.initialAmountRub <= 1000000000 &&
+        d.isArchived is bool &&
+        d.isDeleted is bool &&
+        d.updatedAtEpochMs is int &&
+        d.updatedAtEpochMs >= 0;
+    }
+
+    // ===============================================================
+    // Contour 1: Android Family Space (/zfold_family_spaces/{spaceKey})
+    // ===============================================================
+
+    match /zfold_family_spaces/{spaceKey} {
+      // Deny direct read/write on the space document itself
+      allow read, write: if false;
+
+      match /members/{uid} {
+        allow read: if isOwner(uid) && isValidSpaceKey(spaceKey);
+        allow create: if isOwner(uid) &&
+          isValidSpaceKey(spaceKey) &&
+          uidUnchanged() &&
+          validMemberData(request.resource.data, 'FAMILY');
+        allow update: if isOwner(uid) &&
+          isValidSpaceKey(spaceKey) &&
+          uidNotModified() &&
+          validMemberData(request.resource.data, 'FAMILY');
+        allow delete: if false;
+      }
+
+      match /meta/{docId} {
+        allow read: if isFamilyMember(spaceKey) && docId == 'config';
+        allow create: if isFamilyMember(spaceKey) &&
+          docId == 'config' &&
+          validMetaConfig(request.resource.data);
+        allow update: if isFamilyMember(spaceKey) &&
+          docId == 'config' &&
+          validMetaConfig(request.resource.data) &&
+          request.resource.data.updatedAtEpochMs >= resource.data.updatedAtEpochMs;
+        allow delete: if false;
+      }
+
+      match /expenses/{expenseId} {
+        allow read: if isFamilyMember(spaceKey);
+        allow create: if isFamilyMember(spaceKey) &&
+          isValidDocId(expenseId) &&
+          validExpenseDoc(request.resource.data, expenseId);
+        allow update: if isFamilyMember(spaceKey) &&
+          isValidDocId(expenseId) &&
+          validExpenseDoc(request.resource.data, expenseId) &&
+          request.resource.data.updatedAtEpochMs >= resource.data.updatedAtEpochMs;
+        allow delete: if false;
+      }
+
+      match /recurring_payments/{paymentId} {
+        allow read: if isFamilyMember(spaceKey);
+        allow create: if isFamilyMember(spaceKey) &&
+          isValidDocId(paymentId) &&
+          validRecurringDoc(request.resource.data, paymentId);
+        allow update: if isFamilyMember(spaceKey) &&
+          isValidDocId(paymentId) &&
+          validRecurringDoc(request.resource.data, paymentId) &&
+          request.resource.data.updatedAtEpochMs >= resource.data.updatedAtEpochMs;
+        allow delete: if false;
+      }
+
+      match /savings_goals/{goalId} {
+        allow read: if isFamilyMember(spaceKey);
+        allow create: if isFamilyMember(spaceKey) &&
+          isValidDocId(goalId) &&
+          validGoalDoc(request.resource.data, goalId);
+        allow update: if isFamilyMember(spaceKey) &&
+          isValidDocId(goalId) &&
+          validGoalDoc(request.resource.data, goalId) &&
+          request.resource.data.updatedAtEpochMs >= resource.data.updatedAtEpochMs;
+        allow delete: if false;
+      }
+    }
+
+    // ===============================================================
+    // Contour 2: Android Grandma Solo Space (/zfold_grandma_spaces/{spaceKey})
+    // ===============================================================
+
+    match /zfold_grandma_spaces/{spaceKey} {
+      // Deny direct read/write on the space document itself
+      allow read, write: if false;
+
+      match /members/{uid} {
+        allow read: if isOwner(uid) && isValidGrandmaSpaceKey(spaceKey);
+        allow create: if isOwner(uid) &&
+          isValidGrandmaSpaceKey(spaceKey) &&
+          uidUnchanged() &&
+          validMemberData(request.resource.data, 'GRANDMA_SOLO');
+        allow update: if isOwner(uid) &&
+          isValidGrandmaSpaceKey(spaceKey) &&
+          uidNotModified() &&
+          validMemberData(request.resource.data, 'GRANDMA_SOLO');
+        allow delete: if false;
+      }
+
+      match /meta/{docId} {
+        allow read: if isGrandmaMember(spaceKey) && docId == 'config';
+        allow create: if isGrandmaMember(spaceKey) &&
+          docId == 'config' &&
+          validMetaConfig(request.resource.data);
+        allow update: if isGrandmaMember(spaceKey) &&
+          docId == 'config' &&
+          validMetaConfig(request.resource.data) &&
+          request.resource.data.updatedAtEpochMs >= resource.data.updatedAtEpochMs;
+        allow delete: if false;
+      }
+
+      match /expenses/{expenseId} {
+        allow read: if isGrandmaMember(spaceKey);
+        allow create: if isGrandmaMember(spaceKey) &&
+          isValidDocId(expenseId) &&
+          validExpenseDoc(request.resource.data, expenseId);
+        allow update: if isGrandmaMember(spaceKey) &&
+          isValidDocId(expenseId) &&
+          validExpenseDoc(request.resource.data, expenseId) &&
+          request.resource.data.updatedAtEpochMs >= resource.data.updatedAtEpochMs;
+        allow delete: if false;
+      }
+
+      match /recurring_payments/{paymentId} {
+        allow read: if isGrandmaMember(spaceKey);
+        allow create: if isGrandmaMember(spaceKey) &&
+          isValidDocId(paymentId) &&
+          validRecurringDoc(request.resource.data, paymentId);
+        allow update: if isGrandmaMember(spaceKey) &&
+          isValidDocId(paymentId) &&
+          validRecurringDoc(request.resource.data, paymentId) &&
+          request.resource.data.updatedAtEpochMs >= resource.data.updatedAtEpochMs;
+        allow delete: if false;
+      }
+
+      match /savings_goals/{goalId} {
+        allow read: if isGrandmaMember(spaceKey);
+        allow create: if isGrandmaMember(spaceKey) &&
+          isValidDocId(goalId) &&
+          validGoalDoc(request.resource.data, goalId);
+        allow update: if isGrandmaMember(spaceKey) &&
+          isValidDocId(goalId) &&
+          validGoalDoc(request.resource.data, goalId) &&
+          request.resource.data.updatedAtEpochMs >= resource.data.updatedAtEpochMs;
+        allow delete: if false;
+      }
+    }
+  }
+}

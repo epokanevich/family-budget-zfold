@@ -24,6 +24,9 @@ interface ExpenseDao {
     @Query("SELECT COUNT(*) FROM expenses WHERE isSynced = 1")
     suspend fun countSyncedExpenses(): Int
 
+    @Query("SELECT COUNT(*) FROM expenses")
+    suspend fun countExpenses(): Int
+
     /**
      * Атомарно помечает запись синхронизированной, только если она не менялась локально
      * с момента отправки в облако (иначе свежая правка останется isSynced = 0 и уйдёт следующим циклом).

@@ -18,6 +18,53 @@ fun escapeForBuildConfig(raw: String?): String = (raw ?: "")
     .replace("\"", "\\\"")
     .replace("\$", "\\u0024")
 
+data class FirebaseBuildConfigData(
+    val projectId: String,
+    val appId: String,
+    val apiKey: String,
+    val storageBucket: String
+)
+
+@Suppress("UNCHECKED_CAST")
+fun resolveFirebaseConfig(
+    candidateFiles: List<File>,
+    targetPackage: String
+): FirebaseBuildConfigData {
+    val file = candidateFiles.firstOrNull { it.isFile && it.length() > 0L }
+    if (file != null) {
+        runCatching {
+            val root = groovy.json.JsonSlurper().parse(file) as? Map<String, Any?>
+            val projectInfo = root?.get("project_info") as? Map<String, Any?>
+            val projectId = (projectInfo?.get("project_id") as? String).orEmpty()
+            val storageBucket = (projectInfo?.get("storage_bucket") as? String).orEmpty()
+            val clients = root?.get("client") as? List<Map<String, Any?>> ?: emptyList()
+            val matchedClient = clients.firstOrNull { client ->
+                val clientInfo = client["client_info"] as? Map<String, Any?>
+                val androidInfo = clientInfo?.get("android_client_info") as? Map<String, Any?>
+                androidInfo?.get("package_name") == targetPackage
+            } ?: clients.firstOrNull()
+            val clientInfo = matchedClient?.get("client_info") as? Map<String, Any?>
+            val appId = (clientInfo?.get("mobilesdk_app_id") as? String).orEmpty()
+            val apiKeys = matchedClient?.get("api_key") as? List<Map<String, Any?>> ?: emptyList()
+            val apiKey = (apiKeys.firstOrNull()?.get("current_key") as? String).orEmpty()
+            if (projectId.isNotBlank() && appId.isNotBlank() && apiKey.isNotBlank()) {
+                return FirebaseBuildConfigData(
+                    projectId = escapeForBuildConfig(projectId),
+                    appId = escapeForBuildConfig(appId),
+                    apiKey = escapeForBuildConfig(apiKey),
+                    storageBucket = escapeForBuildConfig(storageBucket)
+                )
+            }
+        }
+    }
+    return FirebaseBuildConfigData(
+        projectId = escapeForBuildConfig(System.getenv("FIREBASE_PROJECT_ID")),
+        appId = escapeForBuildConfig(System.getenv("FIREBASE_APP_ID")),
+        apiKey = escapeForBuildConfig(System.getenv("FIREBASE_API_KEY")),
+        storageBucket = escapeForBuildConfig(System.getenv("FIREBASE_STORAGE_BUCKET"))
+    )
+}
+
 ksp {
     // Экспорт схемы Room для будущих Migration (без fallbackToDestructiveMigration)
     arg("room.schemaLocation", "$projectDir/schemas")
@@ -49,6 +96,18 @@ android {
         buildConfigField("Boolean", "IS_SPACE_CODE_LOCKED", "false")
         buildConfigField("Double", "DEFAULT_MONTHLY_BUDGET_RUB", "200000.0")
         buildConfigField("String", "SYNC_CONTOUR", "\"FAMILY\"")
+
+        val defaultFirebase = resolveFirebaseConfig(
+            candidateFiles = listOf(
+                file("src/family/google-services.json"),
+                file("google-services.json")
+            ),
+            targetPackage = "ru.pokanevich.familybudget"
+        )
+        buildConfigField("String", "FIREBASE_PROJECT_ID", "\"${defaultFirebase.projectId}\"")
+        buildConfigField("String", "FIREBASE_APP_ID", "\"${defaultFirebase.appId}\"")
+        buildConfigField("String", "FIREBASE_API_KEY", "\"${defaultFirebase.apiKey}\"")
+        buildConfigField("String", "FIREBASE_STORAGE_BUCKET", "\"${defaultFirebase.storageBucket}\"")
 
         vectorDrawables {
             useSupportLibrary = true
@@ -162,6 +221,12 @@ dependencies {
     // Coroutines & Network for Cloud Sync & Gemini Free Tier AI Advisor
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.0")
+
+    // Firebase Cloud Firestore & Anonymous Auth (BoM 33.1.2 compatible with Kotlin 1.9.23)
+    implementation(platform("com.google.firebase:firebase-bom:33.1.2"))
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.guava:guava:32.1.3-android")
 
     // Unit Testing
     testImplementation("junit:junit:4.13.2")

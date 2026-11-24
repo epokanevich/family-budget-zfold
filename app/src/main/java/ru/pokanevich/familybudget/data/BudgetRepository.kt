@@ -1,7 +1,7 @@
 package ru.pokanevich.familybudget.data
 
 import android.content.Context
-import android.util.Base64
+import android.net.Uri
 import android.util.Log
 import androidx.room.withTransaction
 import kotlinx.coroutines.CancellationException
@@ -20,13 +20,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import org.json.JSONArray
-import org.json.JSONObject
 import ru.pokanevich.familybudget.BuildConfig
+import ru.pokanevich.familybudget.data.sync.FirestoreBudgetSyncSource
+import ru.pokanevich.familybudget.data.sync.GithubLegacyMigrator
+import ru.pokanevich.familybudget.data.sync.RemoteBudgetSyncSource
+import ru.pokanevich.familybudget.data.sync.SyncContour
 import ru.pokanevich.familybudget.widget.BudgetWidgetProvider
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 import kotlin.math.roundToLong
@@ -91,14 +90,12 @@ class BudgetRepository private constructor(context: Context) {
      */
     private val pendingSyncRequested = AtomicBoolean(false)
 
-    private var cachedFamilyCode: String? = null
-    private var cachedEtag: String? = null
-    private var cachedRemoteSha: String? = null
-    private var cachedRemoteMap: Map<String, ExpenseEntity> = emptyMap()
+    private val syncSource: RemoteBudgetSyncSource =
+        FirestoreBudgetSyncSource(appContext) { prefs.deviceInstallationId }
 
-    private var cachedConfigEtag: String? = null
-    private var cachedConfigSha: String? = null
-    private var cachedRemoteConfig: FamilyConfig? = null
+    private var cachedSpaceKey: String? = null
+    private val listenerLock = Any()
+    private var realtimeListener: AutoCloseable? = null
 
     private val _syncState = MutableStateFlow(SyncState.OFFLINE_READY)
     val syncState: StateFlow<SyncState> = _syncState
@@ -129,14 +126,15 @@ class BudgetRepository private constructor(context: Context) {
     }
 
     /**
-     * Переключает частоту фонового поллинга GitHub API в зависимости от жизненного цикла UI:
-     * на активном экране — каждые 15 секунд, в фоне — раз в 3 минуты (при переходе в foreground
-     * цикл пробуждается немедленно и проверяет наступившие регулярные платежи).
+     * Переключает режим синхронизации Cloud Firestore в зависимости от жизненного цикла UI:
+     * на активном экране держит SnapshotListener в реальном времени и подстраховку раз в минуту;
+     * при уходе в фон слушатель немедленно закрывается для экономии заряда и трафика.
      */
     fun setForegroundActive(active: Boolean) {
         val previous = isForegroundActive
         isForegroundActive = active
         if (active && !previous) {
+            attachRealtimeListener()
             scope.launch {
                 val changed = recurringMutex.withLock {
                     evaluateAndPersistRecurringLocked()
@@ -146,13 +144,32 @@ class BudgetRepository private constructor(context: Context) {
                 }
             }
             foregroundWakeupSignal.trySend(Unit)
+        } else if (!active && previous) {
+            closeRealtimeListener()
+        }
+    }
+
+    private fun attachRealtimeListener() {
+        val contour = SyncContour.current()
+        val spaceKey = SyncContour.validateAndNormalizeSpaceKey(prefs.familySpaceCode, contour)
+        synchronized(listenerLock) {
+            realtimeListener?.let { runCatching { it.close() } }
+            realtimeListener = syncSource.observeRealtimeChanges(contour, spaceKey) {
+                requestCoalescedSync()
+            }
+        }
+    }
+
+    private fun closeRealtimeListener() {
+        synchronized(listenerLock) {
+            realtimeListener?.let { runCatching { it.close() } }
+            realtimeListener = null
         }
     }
 
     /**
-     * Запускает двустороннюю облачную синхронизацию между двумя смартфонами
-     * через приватный GitHub-репозиторий epokanevich/family-budget-sync-db.
-     * Использует ETag (304 Not Modified) для экономии трафика и пакетный Room upsertAll.
+     * Запускает двустороннюю облачную синхронизацию на базе Cloud Firestore
+     * с инкрементальным pull по watermark и пакетной записью через WriteBatch.
      */
     fun startRealtimeSync() {
         pollingJob?.cancel()
@@ -230,10 +247,12 @@ class BudgetRepository private constructor(context: Context) {
      * семей (или тестовой базы) никогда не смешивались и не загружались в чужое облако.
      */
     suspend fun switchFamilySpace(newFamilyCode: String, initialMonthlyBudgetRub: Double? = null) {
-        val targetCode = FamilyPreferences.normalizeFamilyCode(newFamilyCode)
+        val contour = SyncContour.current()
+        val targetCode = SyncContour.validateAndNormalizeSpaceKey(newFamilyCode, contour)
         val switched = syncMutex.withLock {
-            val currentCode = FamilyPreferences.normalizeFamilyCode(prefs.familySpaceCode)
+            val currentCode = SyncContour.validateAndNormalizeSpaceKey(prefs.familySpaceCode, contour)
             if (currentCode == targetCode) return@withLock false
+            closeRealtimeListener()
             recurringMutex.withLock {
                 goalsMutex.withLock {
                     dao.deleteAll()
@@ -253,13 +272,9 @@ class BudgetRepository private constructor(context: Context) {
                         )
                         applyLocalConfigLocked(cleanConfig, hasUnsynced = false)
                     }
-                    cachedFamilyCode = targetCode
-                    cachedEtag = null
-                    cachedRemoteSha = null
-                    cachedRemoteMap = emptyMap()
-                    cachedConfigEtag = null
-                    cachedConfigSha = null
-                    cachedRemoteConfig = null
+                    prefs.clearFirestoreSyncState(currentCode)
+                    prefs.clearFirestoreSyncState(targetCode)
+                    cachedSpaceKey = targetCode
                     prefs.recentPushDedupKeys = emptyList()
                     prefs.familySpaceCode = targetCode
                 }
@@ -268,6 +283,7 @@ class BudgetRepository private constructor(context: Context) {
         }
         if (switched) {
             BudgetWidgetProvider.requestUpdate(appContext)
+            if (isForegroundActive) attachRealtimeListener()
             syncWithCloudNow()
         }
     }
@@ -359,55 +375,121 @@ class BudgetRepository private constructor(context: Context) {
         }
     }
 
-    private sealed interface GithubFileFetchResult {
-        data object NotModified : GithubFileFetchResult
-        data object NotFound : GithubFileFetchResult
-        data class Loaded(
-            val sha: String?,
-            val size: Int,
-            val etag: String?,
-            val decodedText: String
-        ) : GithubFileFetchResult
-    }
-
-    private class RemoteConfigSnapshot(
-        val sha: String?,
-        val config: FamilyConfig?,
-        val notModified: Boolean
-    )
-
-    private class RemoteSnapshot(
-        val sha: String?,
-        val items: Map<String, ExpenseEntity>,
-        val notModified: Boolean
-    )
-
     private suspend fun performSyncCycle(): SyncState {
-        val token = prefs.githubSyncToken
-        if (token.isBlank()) return SyncState.OFFLINE_READY
+        if (!syncSource.isConfigured) return SyncState.OFFLINE_READY
 
-        val familyCode = FamilyPreferences.normalizeFamilyCode(prefs.familySpaceCode)
+        val contour = SyncContour.current()
+        val spaceKey = SyncContour.validateAndNormalizeSpaceKey(prefs.familySpaceCode, contour)
 
-        if (cachedFamilyCode != familyCode) {
-            cachedFamilyCode = familyCode
-            cachedEtag = null
-            cachedRemoteSha = null
-            cachedRemoteMap = emptyMap()
-            cachedConfigEtag = null
-            cachedConfigSha = null
-            cachedRemoteConfig = null
+        if (cachedSpaceKey != spaceKey) {
+            closeRealtimeListener()
+            cachedSpaceKey = spaceKey
         }
 
-        // 1. Строго сначала синхронизируем config_v1.json, чтобы новые кастомные категории
-        // и шаблоны регулярных платежей всегда приезжали раньше операций из budget_v3.json.
-        syncConfigCycle(familyCode, token)
-        mirrorConfigRecurringToRoom()
-        mirrorConfigGoalsToRoom()
+        // Одноразовый read-only перенос из старого GitHub-бэкапа (если Firestore пуст на новой установке FAMILY).
+        maybeAutoSeedFromReadOnlyGithubBackup(contour, spaceKey)
 
-        // 2. Затем синхронизируем операции в budget_v3.json.
-        syncExpensesCycle(familyCode, token)
+        // 1. Транзакционно синхронизируем meta/config (лимиты, категории, общий месячный бюджет).
+        val hasUnsyncedBeforeMerge = synchronized(configLock) { prefs.hasUnsyncedConfig }
+        val localConfigNow = synchronized(configLock) { _familyConfig.value }
+        val configOutcome = syncSource.syncConfig(
+            contour = contour,
+            spaceKey = spaceKey,
+            localConfig = localConfigNow,
+            hasUnsyncedLocal = hasUnsyncedBeforeMerge
+        )
+        if (configOutcome.remoteExists) {
+            prefs.markConfigSyncedForFamily(spaceKey)
+        }
+        synchronized(configLock) {
+            val latest = _familyConfig.value
+            val mergedFull = configOutcome.mergedConfig.copy(
+                recurringPayments = latest.recurringPayments,
+                savingsGoals = latest.savingsGoals
+            )
+            if (latest.monthlyBudgetRub == localConfigNow.monthlyBudgetRub &&
+                latest.budgetUpdatedAtEpochMs == localConfigNow.budgetUpdatedAtEpochMs &&
+                latest.categories == localConfigNow.categories
+            ) {
+                if (configOutcome.needsLocalUpdate || prefs.hasUnsyncedConfig) {
+                    applyLocalConfigLocked(mergedFull, hasUnsynced = false)
+                }
+            } else {
+                val reMerged = FamilyConfig.merge(latest, configOutcome.mergedConfig)
+                applyLocalConfigLocked(reMerged, hasUnsynced = true)
+            }
+        }
 
-        // 3. Проверяем наступившие регулярные платежи уже на свежей базе (без дублей с другим телефоном).
+        // 2. Инкрементальный pull операций, регулярных платежей и копилок из Cloud Firestore.
+        val currentWatermark = prefs.getFirestoreWatermark(spaceKey)
+        val delta = syncSource.pullChanges(
+            contour = contour,
+            spaceKey = spaceKey,
+            sinceWatermarkMs = currentWatermark
+        )
+
+        if (currentWatermark <= 0L && !delta.remoteExists &&
+            (prefs.hasSyncedFirestoreSpace(spaceKey) || dao.countSyncedExpenses() > 0)
+        ) {
+            throw SyncGuardException(
+                "Sync guard: Firestore space $spaceKey returned empty full snapshot while local DB has synced records"
+            )
+        }
+
+        // 3. Слияние регулярных платежей и копилок между Room и Firestore.
+        val recurringToPush = mergeAndDetermineRecurringToPush(delta.recurringDelta, delta.isFullSnapshot)
+        val goalsToPush = mergeAndDetermineGoalsToPush(delta.goalsDelta, delta.isFullSnapshot)
+
+        // 4. Слияние операций (Last-Write-Wins + кросс-девайс дедупликация).
+        val mergePlan = buildIncrementalSyncMergePlan(
+            localList = dao.getAllExpenses(),
+            remoteDeltaMap = delta.expensesDelta,
+            remoteExists = delta.remoteExists,
+            isFullSnapshot = delta.isFullSnapshot,
+            nowMs = System.currentTimeMillis()
+        )
+        if (mergePlan.toUpsertLocally.isNotEmpty()) {
+            db.withTransaction {
+                mergePlan.toUpsertLocally.chunked(250).forEach { chunk ->
+                    dao.upsertAll(chunk)
+                }
+            }
+        }
+
+        // 5. Пакетный push изменений в Cloud Firestore (WriteBatch <= 400).
+        val expensesToPush = mergePlan.pushedVersions.keys.mapNotNull { mergePlan.mergedMap[it] }
+        var maxWatermark = maxOf(currentWatermark, delta.maxObservedWatermarkMs)
+        if (expensesToPush.isNotEmpty() || recurringToPush.isNotEmpty() || goalsToPush.isNotEmpty()) {
+            val registrySnapshot = synchronized(configLock) { _categoryRegistry.value }
+            syncSource.pushChanges(
+                contour = contour,
+                spaceKey = spaceKey,
+                expenses = expensesToPush,
+                recurring = recurringToPush,
+                goals = goalsToPush,
+                registry = registrySnapshot
+            )
+            markPushedAsSynced(mergePlan.pushedVersions)
+            prefs.clearUnsyncedRecurringIds(recurringToPush.map { it.id }.toSet())
+            prefs.clearUnsyncedGoalIds(goalsToPush.map { it.id }.toSet())
+            val pushedMax = maxOf(
+                expensesToPush.maxOfOrNull { it.updatedAtEpochMs } ?: 0L,
+                recurringToPush.maxOfOrNull { it.updatedAtEpochMs } ?: 0L,
+                goalsToPush.maxOfOrNull { it.updatedAtEpochMs } ?: 0L
+            )
+            if (pushedMax > maxWatermark) maxWatermark = pushedMax
+        }
+
+        prefs.markFirestoreSpaceSynced(spaceKey)
+        if (maxWatermark > 0L) {
+            prefs.setFirestoreWatermark(spaceKey, maxWatermark)
+        }
+
+        if (isForegroundActive && synchronized(listenerLock) { realtimeListener == null }) {
+            attachRealtimeListener()
+        }
+
+        // 6. Проверяем наступившие регулярные платежи уже на свежей базе (без дублей с другим телефоном).
         val recurringChanged = recurringMutex.withLock {
             evaluateAndPersistRecurringLocked()
         }
@@ -418,408 +500,129 @@ class BudgetRepository private constructor(context: Context) {
         return SyncState.CLOUD_CONNECTED
     }
 
-    private fun syncConfigCycle(familyCode: String, token: String) {
-        val filePath = "families/$familyCode/config_v1.json"
-        val apiUrl = "https://api.github.com/repos/epokanevich/family-budget-sync-db/contents/$filePath"
+    private suspend fun maybeAutoSeedFromReadOnlyGithubBackup(contour: SyncContour, spaceKey: String) {
+        if (contour != SyncContour.FAMILY) return
+        if (prefs.isGithubLegacyMigrated(spaceKey)) return
+        val token = prefs.githubSyncToken.trim()
+        if (token.isBlank()) {
+            return
+        }
+        if (dao.countExpenses() > 0) {
+            prefs.markGithubLegacyMigrated(spaceKey)
+            return
+        }
+        val probe = runCatching {
+            syncSource.pullChanges(contour, spaceKey, sinceWatermarkMs = 0L)
+        }.getOrNull() ?: return
+        if (probe.remoteExists) {
+            prefs.markGithubLegacyMigrated(spaceKey)
+            return
+        }
 
-        for (attempt in 0..1) {
-            val remote = fetchRemoteConfigSnapshot(apiUrl, filePath, familyCode, token)
-            val hasUnsyncedBeforeMerge = synchronized(configLock) { prefs.hasUnsyncedConfig }
+        val payload = runCatching {
+            GithubLegacyMigrator.fetchFromGithubReadOnly(spaceKey, token)
+        }.getOrNull() ?: return
 
-            if (remote.notModified && !hasUnsyncedBeforeMerge) {
-                return
+        applyLegacyMigrationPayload(payload)
+        prefs.markGithubLegacyMigrated(spaceKey)
+    }
+
+    suspend fun importLegacyJsonUri(uri: Uri): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            val stream = appContext.contentResolver.openInputStream(uri)
+                ?: throw IllegalStateException("Не удалось открыть JSON-файл")
+            val payload = stream.use { GithubLegacyMigrator.parseFromJsonStream(it) }
+            applyLegacyMigrationPayload(payload)
+        }
+    }
+
+    private suspend fun applyLegacyMigrationPayload(payload: ru.pokanevich.familybudget.data.sync.LegacyMigrationPayload): Int {
+        payload.config?.let { importedCfg ->
+            synchronized(configLock) {
+                val merged = FamilyConfig.merge(_familyConfig.value, importedCfg)
+                applyLocalConfigLocked(merged, hasUnsynced = true)
             }
+            mirrorConfigRecurringToRoom()
+            mirrorConfigGoalsToRoom()
+            payload.config.recurringPayments.forEach { prefs.markRecurringUnsynced(it.id) }
+            payload.config.savingsGoals.forEach { prefs.markGoalUnsynced(it.id) }
+        }
+        return if (payload.expenses.isNotEmpty()) {
+            importExpensesBatch(payload.expenses)
+        } else {
+            0
+        }
+    }
 
-            val localNow = synchronized(configLock) { _familyConfig.value }
-            val plan = buildConfigSyncPlan(
-                local = localNow,
-                remote = remote.config,
-                remoteExists = remote.sha != null
-            )
+    private suspend fun mergeAndDetermineRecurringToPush(
+        remoteDelta: List<RecurringPaymentEntity>,
+        isFullSnapshot: Boolean
+    ): List<RecurringPaymentEntity> = recurringMutex.withLock {
+        val localList = recurringDao.getAll()
+        val remoteById = remoteDelta.associateBy { it.id }
+        val merged = FamilyConfig.mergeRecurringPayments(localList, remoteDelta)
+        val mergedById = merged.associateBy { it.id }
 
-            if (!plan.needCloudPush) {
-                if (remote.sha != null) {
-                    prefs.markConfigSyncedForFamily(familyCode)
-                }
-                val needFollowUp = synchronized(configLock) {
-                    val latest = _familyConfig.value
-                    if (latest.isEquivalentTo(localNow)) {
-                        if (plan.updateLocal || prefs.hasUnsyncedConfig) {
-                            applyLocalConfigLocked(plan.mergedConfig, hasUnsynced = false)
-                        }
-                        false
-                    } else {
-                        val reMerged = FamilyConfig.merge(latest, plan.mergedConfig)
-                        val stillNeedsPush = remote.config == null || !reMerged.isEquivalentTo(remote.config)
-                        applyLocalConfigLocked(reMerged, hasUnsynced = stillNeedsPush)
-                        stillNeedsPush
-                    }
-                }
-                if (needFollowUp) {
-                    requestCoalescedSync()
-                }
-                return
+        val toSaveLocally = merged.filter { item ->
+            val loc = localList.firstOrNull { it.id == item.id }
+            loc == null || loc != item
+        }
+        if (toSaveLocally.isNotEmpty()) {
+            recurringDao.upsertAll(toSaveLocally)
+        }
+        synchronized(configLock) {
+            val current = _familyConfig.value
+            val configMerged = FamilyConfig.mergeRecurringPayments(current.recurringPayments, merged)
+            if (configMerged != current.recurringPayments) {
+                applyLocalConfigLocked(current.copy(recurringPayments = configMerged), hasUnsynced = prefs.hasUnsyncedConfig)
             }
+        }
 
-            val payloadToPush = synchronized(configLock) {
-                val latest = _familyConfig.value
-                val toSave = if (latest.isEquivalentTo(localNow)) {
-                    plan.mergedConfig
-                } else {
-                    FamilyConfig.merge(latest, plan.mergedConfig)
-                }
-                if (!toSave.isEquivalentTo(latest) || !prefs.hasUnsyncedConfig) {
-                    applyLocalConfigLocked(toSave, hasUnsynced = true)
-                }
-                toSave
-            }
-
-            val rawBytes = payloadToPush.toJsonObject().toString().toByteArray(Charsets.UTF_8)
-            val putCode = putRemoteFileBytes(
-                apiUrl = apiUrl,
-                token = token,
-                commitMessage = "Sync family config ($familyCode)",
-                rawBytes = rawBytes,
-                remoteSha = remote.sha
-            ) { newSha ->
-                cachedConfigSha = newSha?.ifBlank { null } ?: remote.sha
-                cachedConfigEtag = null
-                cachedRemoteConfig = payloadToPush
-            }
-
+        val unsyncedIds = prefs.unsyncedRecurringIds
+        return@withLock mergedById.values.filter { item ->
+            val rem = remoteById[item.id]
             when {
-                putCode in 200..299 -> {
-                    prefs.markConfigSyncedForFamily(familyCode)
-                    val needFollowUp = synchronized(configLock) {
-                        val latest = _familyConfig.value
-                        if (latest.isEquivalentTo(payloadToPush)) {
-                            applyLocalConfigLocked(payloadToPush, hasUnsynced = false)
-                            false
-                        } else {
-                            val reMerged = FamilyConfig.merge(latest, payloadToPush)
-                            applyLocalConfigLocked(reMerged, hasUnsynced = true)
-                            true
-                        }
-                    }
-                    if (needFollowUp) {
-                        requestCoalescedSync()
-                    }
-                    return
-                }
-                putCode == HttpURLConnection.HTTP_CONFLICT -> {
-                    cachedConfigEtag = null
-                    cachedConfigSha = null
-                    cachedRemoteConfig = null
-                    if (attempt == 0) {
-                        if (BuildConfig.DEBUG) Log.w("BudgetRepository", "GitHub Config PUT HTTP 409 conflict, retrying sync cycle immediately")
-                        continue
-                    }
-                    throw IllegalStateException("GitHub Config PUT HTTP $putCode")
-                }
-                else -> {
-                    cachedConfigEtag = null
-                    throw IllegalStateException("GitHub Config PUT HTTP $putCode")
-                }
+                item.id in unsyncedIds -> rem == null || item.updatedAtEpochMs >= rem.updatedAtEpochMs
+                rem != null -> item.updatedAtEpochMs > rem.updatedAtEpochMs
+                isFullSnapshot -> true
+                else -> false
             }
         }
     }
 
-    private suspend fun syncExpensesCycle(familyCode: String, token: String) {
-        val filePath = "families/$familyCode/budget_v3.json"
-        val apiUrl = "https://api.github.com/repos/epokanevich/family-budget-sync-db/contents/$filePath"
+    private suspend fun mergeAndDetermineGoalsToPush(
+        remoteDelta: List<SavingsGoalEntity>,
+        isFullSnapshot: Boolean
+    ): List<SavingsGoalEntity> = goalsMutex.withLock {
+        val localList = savingsGoalDao.getAll()
+        val remoteById = remoteDelta.associateBy { it.id }
+        val merged = FamilyConfig.mergeSavingsGoals(localList, remoteDelta)
+        val mergedById = merged.associateBy { it.id }
 
-        for (attempt in 0..1) {
-            // 1. Читаем облачный файл (ETag / Blob API для файлов > 1 МБ)
-            val remote = fetchRemoteSnapshot(apiUrl, filePath, token)
-
-            // Если облако не менялось и локально нечего отправлять — завершаем мгновенно
-            if (remote.notModified && dao.getUnsyncedExpenses().isEmpty()) {
-                return
+        val toSaveLocally = merged.filter { item ->
+            val loc = localList.firstOrNull { it.id == item.id }
+            loc == null || loc != item
+        }
+        if (toSaveLocally.isNotEmpty()) {
+            savingsGoalDao.upsertAll(toSaveLocally)
+        }
+        synchronized(configLock) {
+            val current = _familyConfig.value
+            val configMerged = FamilyConfig.mergeSavingsGoals(current.savingsGoals, merged)
+            if (configMerged != current.savingsGoals) {
+                applyLocalConfigLocked(current.copy(savingsGoals = configMerged), hasUnsynced = prefs.hasUnsyncedConfig)
             }
+        }
 
-            // 2. Сливаем локальные записи Room и облачные записи по UUIDv4 (Last-Write-Wins) + кросс-девайс дедуп
-            val plan = buildSyncMergePlan(
-                localList = dao.getAllExpenses(),
-                remoteMap = remote.items,
-                remoteExists = remote.sha != null
-            )
-
-            if (plan.toUpsertLocally.isNotEmpty()) {
-                dao.upsertAll(plan.toUpsertLocally)
-            }
-
-            if (!plan.needCloudPush) return
-
-            // 3. Сохраняем объединённый список в облако (с актуальным CategoryRegistry из config_v1.json)
-            val registrySnapshot = synchronized(configLock) { _categoryRegistry.value }
-            val putCode = putRemoteExpensesFile(
-                apiUrl = apiUrl,
-                token = token,
-                familyCode = familyCode,
-                mergedMap = plan.mergedMap,
-                registry = registrySnapshot,
-                remoteSha = remote.sha
-            ) { newSha ->
-                cachedRemoteSha = newSha?.ifBlank { null } ?: remote.sha
-                cachedEtag = null
-                cachedRemoteMap = plan.mergedMap.mapValues { it.value.copy(isSynced = true) }
-            }
-
+        val unsyncedIds = prefs.unsyncedGoalIds
+        return@withLock mergedById.values.filter { item ->
+            val rem = remoteById[item.id]
             when {
-                putCode in 200..299 -> {
-                    // Только теперь отправленные локальные изменения (включая losers дедупа) считаются синхронизированными
-                    markPushedAsSynced(plan.pushedVersions)
-                    return
-                }
-                putCode == HttpURLConnection.HTTP_CONFLICT -> {
-                    cachedEtag = null
-                    cachedRemoteSha = null
-                    if (attempt == 0) {
-                        if (BuildConfig.DEBUG) Log.w("BudgetRepository", "GitHub PUT HTTP 409 conflict, retrying sync cycle immediately")
-                        continue
-                    }
-                    throw IllegalStateException("GitHub PUT HTTP $putCode")
-                }
-                else -> {
-                    cachedEtag = null
-                    throw IllegalStateException("GitHub PUT HTTP $putCode")
-                }
+                item.id in unsyncedIds -> rem == null || item.updatedAtEpochMs >= rem.updatedAtEpochMs
+                rem != null -> item.updatedAtEpochMs > rem.updatedAtEpochMs
+                isFullSnapshot -> true
+                else -> false
             }
-        }
-    }
-
-    private fun fetchGithubFileContent(
-        apiUrl: String,
-        token: String,
-        etag: String?,
-        errorLabel: String
-    ): GithubFileFetchResult {
-        val getConn = openGithubConnection(apiUrl, token, "GET", readTimeoutMs = 25_000)
-        try {
-            if (!etag.isNullOrBlank()) {
-                getConn.setRequestProperty("If-None-Match", etag)
-            }
-            val getCode = getConn.responseCode
-            return when {
-                getCode == HttpURLConnection.HTTP_NOT_MODIFIED -> GithubFileFetchResult.NotModified
-                getCode == HttpURLConnection.HTTP_NOT_FOUND -> {
-                    getConn.drainErrorStream()
-                    GithubFileFetchResult.NotFound
-                }
-                getCode in 200..299 -> {
-                    val body = getConn.readBodyText()
-                    val fileObj = JSONObject(body)
-                    val remoteSha = fileObj.optString("sha", "").ifBlank { null }
-                    val remoteSize = fileObj.optInt("size", 0)
-                    var contentB64 = fileObj.optString("content", "")
-                        .replace("\n", "")
-                        .replace("\r", "")
-
-                    // Для файлов > 1 МБ GitHub Contents API возвращает пустой content — читаем Git Blob до 100 МБ
-                    if (contentB64.isBlank() && remoteSha != null) {
-                        contentB64 = fetchBlobContent(remoteSha, token)
-                    }
-
-                    val decodedText = if (contentB64.isNotBlank()) {
-                        String(Base64.decode(contentB64, Base64.DEFAULT), Charsets.UTF_8)
-                    } else {
-                        ""
-                    }
-                    GithubFileFetchResult.Loaded(
-                        sha = remoteSha,
-                        size = remoteSize,
-                        etag = getConn.getHeaderField("ETag"),
-                        decodedText = decodedText
-                    )
-                }
-                else -> {
-                    getConn.drainErrorStream()
-                    throw IllegalStateException("$errorLabel HTTP $getCode")
-                }
-            }
-        } finally {
-            getConn.disconnect()
-        }
-    }
-
-    private fun fetchRemoteConfigSnapshot(
-        apiUrl: String,
-        filePath: String,
-        familyCode: String,
-        token: String
-    ): RemoteConfigSnapshot {
-        val res = runCatching {
-            fetchGithubFileContent(apiUrl, token, cachedConfigEtag, "GitHub Config Sync")
-        }.onFailure {
-            cachedConfigEtag = null
-        }.getOrThrow()
-
-        return when (res) {
-            is GithubFileFetchResult.NotModified -> {
-                RemoteConfigSnapshot(cachedConfigSha, cachedRemoteConfig, notModified = true)
-            }
-            is GithubFileFetchResult.NotFound -> {
-                cachedConfigEtag = null
-                val hasSyncedConfig = cachedConfigSha != null || prefs.hasSyncedConfigForFamily(familyCode)
-                if (hasSyncedConfig) {
-                    throw SyncGuardException(
-                        "Sync guard: GET 404 for $filePath, but config was already synced — refusing to recreate cloud config"
-                    )
-                }
-                RemoteConfigSnapshot(null, null, notModified = false)
-            }
-            is GithubFileFetchResult.Loaded -> {
-                cachedConfigEtag = null
-                val parsed = if (res.decodedText.isNotBlank()) {
-                    FamilyConfig.fromJsonString(res.decodedText)
-                } else {
-                    null
-                }
-                if (res.size > 5 && parsed == null) {
-                    throw SyncGuardException(
-                        "Sync guard: remote config size ${res.size} could not be parsed"
-                    )
-                }
-                cachedConfigEtag = res.etag
-                cachedConfigSha = res.sha
-                cachedRemoteConfig = parsed
-                RemoteConfigSnapshot(res.sha, parsed, notModified = false)
-            }
-        }
-    }
-
-    private suspend fun fetchRemoteSnapshot(apiUrl: String, filePath: String, token: String): RemoteSnapshot {
-        val res = runCatching {
-            fetchGithubFileContent(apiUrl, token, cachedEtag, "GitHub Sync")
-        }.onFailure {
-            cachedEtag = null
-        }.getOrThrow()
-
-        return when (res) {
-            is GithubFileFetchResult.NotModified -> {
-                RemoteSnapshot(cachedRemoteSha, cachedRemoteMap, notModified = true)
-            }
-            is GithubFileFetchResult.NotFound -> {
-                cachedEtag = null
-                // 404 — это «новая пустая база» только для устройства, которое ещё ни разу не синхронизировалось.
-                // Иначе (протухший токен, потеря доступа, переименование) нельзя перезаливать файл с нуля.
-                val hasSyncedHistory = cachedRemoteSha != null || dao.countSyncedExpenses() > 0
-                if (hasSyncedHistory) {
-                    throw SyncGuardException(
-                        "Sync guard: GET 404 for $filePath, but local DB already has synced records — refusing to recreate cloud file"
-                    )
-                }
-                RemoteSnapshot(null, emptyMap(), notModified = false)
-            }
-            is GithubFileFetchResult.Loaded -> {
-                cachedEtag = null
-                val remoteMap = mutableMapOf<String, ExpenseEntity>()
-                if (res.decodedText.isNotBlank()) {
-                    val arr = JSONArray(res.decodedText)
-                    for (i in 0 until arr.length()) {
-                        val itemObj = arr.optJSONObject(i) ?: continue
-                        val parsed = ExpenseEntity.fromJsonObject(itemObj) ?: continue
-                        remoteMap[parsed.id] = parsed
-                    }
-                }
-
-                // Защита от случайной перезаписи непустой облачной базы при сбое чтения
-                if (res.size > 5 && remoteMap.isEmpty()) {
-                    throw SyncGuardException("Sync guard: remote size ${res.size} decoded 0 items")
-                }
-
-                cachedEtag = res.etag
-                cachedRemoteSha = res.sha
-                cachedRemoteMap = remoteMap.toMap()
-                RemoteSnapshot(res.sha, remoteMap, notModified = false)
-            }
-        }
-    }
-
-    private fun fetchBlobContent(remoteSha: String, token: String): String {
-        val blobUrl = "https://api.github.com/repos/epokanevich/family-budget-sync-db/git/blobs/$remoteSha"
-        val blobConn = openGithubConnection(blobUrl, token, "GET", readTimeoutMs = 30_000)
-        try {
-            val blobCode = blobConn.responseCode
-            if (blobCode !in 200..299) {
-                blobConn.drainErrorStream()
-                throw IllegalStateException("GitHub Blob HTTP $blobCode")
-            }
-            val blobBody = blobConn.readBodyText()
-            return JSONObject(blobBody)
-                .optString("content", "")
-                .replace("\n", "")
-                .replace("\r", "")
-        } finally {
-            blobConn.disconnect()
-        }
-    }
-
-    private fun putRemoteExpensesFile(
-        apiUrl: String,
-        token: String,
-        familyCode: String,
-        mergedMap: Map<String, ExpenseEntity>,
-        registry: CategoryRegistry,
-        remoteSha: String?,
-        onSuccess: (newSha: String?) -> Unit
-    ): Int {
-        val sortedMerged = mergedMap.values.sortedByDescending { it.createdAtEpochMs }
-        val jsonArray = JSONArray()
-        for (item in sortedMerged) {
-            jsonArray.put(item.toJsonObject(registry))
-        }
-        val rawBytes = jsonArray.toString().toByteArray(Charsets.UTF_8)
-        return putRemoteFileBytes(
-            apiUrl = apiUrl,
-            token = token,
-            commitMessage = "Sync family budget ($familyCode)",
-            rawBytes = rawBytes,
-            remoteSha = remoteSha,
-            onSuccess = onSuccess
-        )
-    }
-
-    /** Выполняет PUT произвольного файла в GitHub Contents API и возвращает HTTP-код; [onSuccess] вызывается при 200..299. */
-    private fun putRemoteFileBytes(
-        apiUrl: String,
-        token: String,
-        commitMessage: String,
-        rawBytes: ByteArray,
-        remoteSha: String?,
-        onSuccess: (newSha: String?) -> Unit
-    ): Int {
-        val encodedB64 = Base64.encodeToString(rawBytes, Base64.NO_WRAP)
-
-        val putBody = JSONObject().apply {
-            put("message", commitMessage)
-            put("content", encodedB64)
-            if (remoteSha != null) {
-                put("sha", remoteSha)
-            }
-        }
-
-        val putConn = openGithubConnection(apiUrl, token, "PUT", readTimeoutMs = 30_000).apply {
-            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-            doOutput = true
-        }
-        try {
-            OutputStreamWriter(putConn.outputStream, Charsets.UTF_8).use { writer ->
-                writer.write(putBody.toString())
-            }
-            val putCode = putConn.responseCode
-            if (putCode in 200..299) {
-                val putRespText = putConn.readBodyText()
-                val newSha = runCatching {
-                    JSONObject(putRespText).optJSONObject("content")?.optString("sha", "")
-                }.getOrNull()
-                onSuccess(newSha)
-            } else {
-                putConn.drainErrorStream()
-            }
-            return putCode
-        } finally {
-            putConn.disconnect()
         }
     }
 
@@ -830,28 +633,6 @@ class BudgetRepository private constructor(context: Context) {
                 dao.markSyncedIfUnchanged(id, updatedAt)
             }
         }
-    }
-
-    private fun openGithubConnection(
-        url: String,
-        token: String,
-        method: String,
-        readTimeoutMs: Int
-    ): HttpURLConnection = (URL(url).openConnection() as HttpURLConnection).apply {
-        requestMethod = method
-        setRequestProperty("Authorization", "token $token")
-        setRequestProperty("Accept", "application/vnd.github+json")
-        setRequestProperty("User-Agent", "FamilyBudgetZFold")
-        connectTimeout = 15_000
-        readTimeout = readTimeoutMs
-    }
-
-    private fun HttpURLConnection.readBodyText(): String =
-        inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-
-    /** Дочитывает и закрывает errorStream, чтобы не держать сокет при ответах 4xx/5xx. */
-    private fun HttpURLConnection.drainErrorStream() {
-        runCatching { errorStream?.use { it.readBytes() } }
     }
 
     suspend fun importExpensesBatch(items: List<ExpenseEntity>): Int = withContext(Dispatchers.IO) {
@@ -976,6 +757,7 @@ class BudgetRepository private constructor(context: Context) {
                 normalized
             }
             recurringDao.upsert(saved)
+            prefs.markRecurringUnsynced(saved.id)
             evaluateAndPersistRecurringLocked()
         }
         BudgetWidgetProvider.requestUpdate(appContext)
@@ -1012,6 +794,7 @@ class BudgetRepository private constructor(context: Context) {
                 nextPayment
             } ?: return@withLock false
             recurringDao.upsert(updated)
+            prefs.markRecurringUnsynced(updated.id)
             true
         }
         if (changed) {
@@ -1042,6 +825,7 @@ class BudgetRepository private constructor(context: Context) {
                 nextPayment
             }
             recurringDao.upsert(deleted)
+            prefs.markRecurringUnsynced(deleted.id)
         }
         BudgetWidgetProvider.requestUpdate(appContext)
         requestCoalescedSync()
@@ -1086,6 +870,7 @@ class BudgetRepository private constructor(context: Context) {
                 normalized
             }
             savingsGoalDao.upsert(saved)
+            prefs.markGoalUnsynced(saved.id)
         }
         BudgetWidgetProvider.requestUpdate(appContext)
         requestCoalescedSync()
@@ -1116,6 +901,7 @@ class BudgetRepository private constructor(context: Context) {
                 nextGoal
             }
             savingsGoalDao.upsert(deleted)
+            prefs.markGoalUnsynced(deleted.id)
         }
         BudgetWidgetProvider.requestUpdate(appContext)
         requestCoalescedSync()
@@ -1274,6 +1060,7 @@ class BudgetRepository private constructor(context: Context) {
             }
             if (updatedById.isNotEmpty()) {
                 recurringDao.upsertAll(mergedPayments.filter { it.id in updatedById })
+                updatedById.keys.forEach { prefs.markRecurringUnsynced(it) }
             }
         }
         return true
@@ -1368,11 +1155,14 @@ class BudgetRepository private constructor(context: Context) {
     }
 
     companion object {
-        internal const val FOREGROUND_POLL_INTERVAL_MS = 15_000L
-        internal const val BACKGROUND_POLL_INTERVAL_MS = 180_000L
+        internal const val FOREGROUND_POLL_INTERVAL_MS = 60_000L
+        internal const val BACKGROUND_POLL_INTERVAL_MS = 300_000L
 
         /** Окно кросс-девайс дедупа общей карты (Mir Pay ↔ Банк или Банк ↔ Банк с двух телефонов): ±3 минуты. */
         internal const val CROSS_DEVICE_DEDUP_WINDOW_MS = 180_000L
+
+        /** Окно отбора недавних синхронизированных пушей в Room для кросс-девайсной склейки при delta-синке. */
+        private const val INCREMENTAL_DEDUP_CANDIDATE_WINDOW_MS = 15 * 60_000L
 
         /**
          * Окно дедупа пушей на одном устройстве (>= 5 минут, покрывает допустимый дрифт
@@ -1478,32 +1268,63 @@ class BudgetRepository private constructor(context: Context) {
             remoteMap: Map<String, ExpenseEntity>,
             remoteExists: Boolean,
             nowMs: Long = System.currentTimeMillis()
+        ): SyncMergePlan = buildIncrementalSyncMergePlan(
+            localList = localList,
+            remoteDeltaMap = remoteMap,
+            remoteExists = remoteExists,
+            isFullSnapshot = true,
+            nowMs = nowMs
+        )
+
+        /**
+         * Слияние локальной Room-базы с полным снимком или инкрементальной дельтой Firestore:
+         * - при [isFullSnapshot] == false уже синхронизированные локальные записи, не вошедшие в дельту,
+         *   НЕ помечаются к повторной отправке;
+         * - при этом недавние банковские пуши включаются в кандидатный пул кросс-девайсной дедупликации.
+         */
+        internal fun buildIncrementalSyncMergePlan(
+            localList: List<ExpenseEntity>,
+            remoteDeltaMap: Map<String, ExpenseEntity>,
+            remoteExists: Boolean,
+            isFullSnapshot: Boolean,
+            nowMs: Long = System.currentTimeMillis()
         ): SyncMergePlan {
             val localMap = localList.associateBy { it.id }
-            var needCloudPush = !remoteExists
+            var needCloudPush = isFullSnapshot && !remoteExists
             val mergedMap = mutableMapOf<String, ExpenseEntity>()
+            val dedupCandidatePool = mutableMapOf<String, ExpenseEntity>()
             val toUpsertLocally = mutableListOf<ExpenseEntity>()
             val pushedVersions = mutableMapOf<String, Long>()
 
-            val allIds = (remoteMap.keys + localMap.keys).toSet()
+            val allIds = (remoteDeltaMap.keys + localMap.keys).toSet()
             for (id in allIds) {
                 val loc = localMap[id]
-                val rem = remoteMap[id]
+                val rem = remoteDeltaMap[id]
                 when {
                     loc != null && rem == null -> {
-                        mergedMap[id] = loc
-                        needCloudPush = true
-                        if (!loc.isSynced) pushedVersions[id] = loc.updatedAtEpochMs
+                        if (isFullSnapshot || !loc.isSynced) {
+                            mergedMap[id] = loc
+                            dedupCandidatePool[id] = loc
+                            needCloudPush = true
+                            if (!loc.isSynced) pushedVersions[id] = loc.updatedAtEpochMs
+                        } else if (!loc.isDeleted &&
+                            isBankPushSource(loc.sourceType) &&
+                            abs(nowMs - loc.createdAtEpochMs) <= INCREMENTAL_DEDUP_CANDIDATE_WINDOW_MS
+                        ) {
+                            dedupCandidatePool[id] = loc
+                        }
                     }
                     loc == null && rem != null -> {
                         val syncedRem = rem.copy(isSynced = true)
                         mergedMap[id] = syncedRem
+                        dedupCandidatePool[id] = syncedRem
                         toUpsertLocally.add(syncedRem)
                     }
                     loc != null && rem != null -> {
                         val resolvedRecurring = resolveRecurringConflict(loc, rem)
                         if (resolvedRecurring != null) {
                             mergedMap[id] = resolvedRecurring
+                            dedupCandidatePool[id] = resolvedRecurring
                             if (resolvedRecurring.updatedAtEpochMs > rem.updatedAtEpochMs || !resolvedRecurring.isSynced) {
                                 needCloudPush = true
                                 pushedVersions[id] = resolvedRecurring.updatedAtEpochMs
@@ -1513,16 +1334,18 @@ class BudgetRepository private constructor(context: Context) {
                             }
                         } else if (loc.updatedAtEpochMs > rem.updatedAtEpochMs) {
                             mergedMap[id] = loc
+                            dedupCandidatePool[id] = loc
                             needCloudPush = true
                             if (!loc.isSynced) pushedVersions[id] = loc.updatedAtEpochMs
                         } else if (rem.updatedAtEpochMs > loc.updatedAtEpochMs) {
                             val syncedRem = rem.copy(isSynced = true)
                             mergedMap[id] = syncedRem
+                            dedupCandidatePool[id] = syncedRem
                             toUpsertLocally.add(syncedRem)
                         } else {
-                            // Та же версия уже лежит в облаке — локально можно считать синхронизированной
                             val synced = loc.copy(isSynced = true)
                             mergedMap[id] = synced
+                            dedupCandidatePool[id] = synced
                             if (!loc.isSynced) {
                                 toUpsertLocally.add(synced)
                             }
@@ -1531,14 +1354,17 @@ class BudgetRepository private constructor(context: Context) {
                 }
             }
 
-            val dedupResult = deduplicateCrossDevicePushExpensesWithEnrichment(mergedMap, nowMs)
+            val dedupResult = deduplicateCrossDevicePushExpensesWithEnrichment(dedupCandidatePool, nowMs)
             val dedupedLosers = dedupResult.losers
             val changedByDedup = dedupResult.losers + dedupResult.enrichedWinners
             if (changedByDedup.isNotEmpty()) {
                 val changedIds = changedByDedup.map { it.id }.toSet()
                 toUpsertLocally.removeAll { it.id in changedIds }
                 toUpsertLocally.addAll(changedByDedup)
-                changedByDedup.forEach { pushedVersions[it.id] = it.updatedAtEpochMs }
+                changedByDedup.forEach {
+                    mergedMap[it.id] = it
+                    pushedVersions[it.id] = it.updatedAtEpochMs
+                }
                 needCloudPush = true
             }
 

@@ -118,6 +118,7 @@ fun FamilySettingsSheet(
     onRequestBatteryExemption: () -> Unit,
     onSimulateTestPush: () -> Unit,
     onImportBackupUri: (Uri) -> Unit,
+    onImportLegacyJsonUri: (Uri) -> Unit = {},
     onSyncNow: () -> Unit,
     onOpenCategoriesAndLimits: () -> Unit,
     onOpenRecurringPayments: () -> Unit,
@@ -134,6 +135,13 @@ fun FamilySettingsSheet(
     ) { uri ->
         if (uri != null) {
             onImportBackupUri(uri)
+        }
+    }
+    val legacyJsonPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            onImportLegacyJsonUri(uri)
         }
     }
 
@@ -883,6 +891,26 @@ fun FamilySettingsSheet(
                             fontWeight = FontWeight.SemiBold
                         )
                     }
+                }
+                OutlinedButton(
+                    enabled = !isImportingBackup,
+                    onClick = { legacyJsonPickerLauncher.launch(arrayOf("application/json", "*/*")) },
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, palette.accentBlue),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.FileUpload,
+                        contentDescription = null,
+                        tint = palette.accentBlue,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Импорт резервной копии (.json)",
+                        color = palette.accentBlue,
+                        fontWeight = FontWeight.SemiBold
+                    )
                 }
                 if (importStatusMessage != null) {
                     Text(

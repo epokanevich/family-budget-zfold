@@ -1084,6 +1084,22 @@ fun FamilyBudgetApp(
                     isImportingBackup = false
                 }
             },
+            onImportLegacyJsonUri = { uri ->
+                isImportingBackup = true
+                importStatusMessage = null
+                scope.launch {
+                    val res = repository.importLegacyJsonUri(uri)
+                    importStatusMessage = res.fold(
+                        onSuccess = { added ->
+                            "Готово: импортировано $added записей из JSON"
+                        },
+                        onFailure = { err ->
+                            "Ошибка импорта JSON: ${err.message}"
+                        }
+                    )
+                    isImportingBackup = false
+                }
+            },
             onSyncNow = {
                 scope.launch { repository.syncWithCloudNow() }
             },

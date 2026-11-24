@@ -276,6 +276,79 @@ class FamilyPreferences(context: Context) : PinLockStorage {
         }
     }
 
+    fun getFirestoreWatermark(spaceKey: String): Long =
+        runCatching { prefs.getLong("$KEY_FIRESTORE_WATERMARK_PREFIX$spaceKey", 0L) }
+            .getOrDefault(0L)
+            .coerceAtLeast(0L)
+
+    fun setFirestoreWatermark(spaceKey: String, watermarkMs: Long) {
+        val prev = getFirestoreWatermark(spaceKey)
+        if (watermarkMs > prev) {
+            prefs.edit().putLong("$KEY_FIRESTORE_WATERMARK_PREFIX$spaceKey", watermarkMs).apply()
+        }
+    }
+
+    fun clearFirestoreSyncState(spaceKey: String) {
+        prefs.edit()
+            .remove("$KEY_FIRESTORE_WATERMARK_PREFIX$spaceKey")
+            .remove("$KEY_FIRESTORE_SYNCED_PREFIX$spaceKey")
+            .remove(KEY_UNSYNCED_RECURRING_IDS)
+            .remove(KEY_UNSYNCED_GOAL_IDS)
+            .apply()
+    }
+
+    fun hasSyncedFirestoreSpace(spaceKey: String): Boolean =
+        runCatching { prefs.getBoolean("$KEY_FIRESTORE_SYNCED_PREFIX$spaceKey", false) }
+            .getOrDefault(false)
+
+    fun markFirestoreSpaceSynced(spaceKey: String) {
+        prefs.edit().putBoolean("$KEY_FIRESTORE_SYNCED_PREFIX$spaceKey", true).apply()
+    }
+
+    fun isGithubLegacyMigrated(spaceKey: String): Boolean =
+        runCatching { prefs.getBoolean("$KEY_GITHUB_MIGRATED_PREFIX$spaceKey", false) }
+            .getOrDefault(false)
+
+    fun markGithubLegacyMigrated(spaceKey: String) {
+        prefs.edit().putBoolean("$KEY_GITHUB_MIGRATED_PREFIX$spaceKey", true).apply()
+    }
+
+    var unsyncedRecurringIds: Set<String>
+        get() = runCatching {
+            prefs.getStringSet(KEY_UNSYNCED_RECURRING_IDS, emptySet()).orEmpty()
+        }.getOrDefault(emptySet())
+        set(value) {
+            prefs.edit().putStringSet(KEY_UNSYNCED_RECURRING_IDS, value.toHashSet()).apply()
+        }
+
+    fun markRecurringUnsynced(id: String) {
+        if (id.isBlank()) return
+        unsyncedRecurringIds = unsyncedRecurringIds + id
+    }
+
+    fun clearUnsyncedRecurringIds(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        unsyncedRecurringIds = unsyncedRecurringIds - ids
+    }
+
+    var unsyncedGoalIds: Set<String>
+        get() = runCatching {
+            prefs.getStringSet(KEY_UNSYNCED_GOAL_IDS, emptySet()).orEmpty()
+        }.getOrDefault(emptySet())
+        set(value) {
+            prefs.edit().putStringSet(KEY_UNSYNCED_GOAL_IDS, value.toHashSet()).apply()
+        }
+
+    fun markGoalUnsynced(id: String) {
+        if (id.isBlank()) return
+        unsyncedGoalIds = unsyncedGoalIds + id
+    }
+
+    fun clearUnsyncedGoalIds(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        unsyncedGoalIds = unsyncedGoalIds - ids
+    }
+
     private val syncedConfigFamilies: Set<String>
         get() = safeGetString(KEY_SYNCED_CONFIG_FAMILIES, "")
             .split('\n')
@@ -360,6 +433,11 @@ class FamilyPreferences(context: Context) : PinLockStorage {
         private const val KEY_PIN_AUTO_LOCK_TIMEOUT_MS = "pin_auto_lock_timeout_ms"
         private const val KEY_HIDE_AMOUNTS_ON_WIDGET = "hide_amounts_on_widget"
         private const val KEY_DEVICE_INSTALLATION_ID = "device_installation_id"
+        private const val KEY_FIRESTORE_WATERMARK_PREFIX = "firestore_watermark_"
+        private const val KEY_FIRESTORE_SYNCED_PREFIX = "firestore_synced_"
+        private const val KEY_GITHUB_MIGRATED_PREFIX = "github_legacy_migrated_"
+        private const val KEY_UNSYNCED_RECURRING_IDS = "unsynced_recurring_ids"
+        private const val KEY_UNSYNCED_GOAL_IDS = "unsynced_goal_ids"
 
         val defaultFamilySpaceCode: String
             get() = BuildConfig.DEFAULT_FAMILY_SPACE_CODE.trim().ifBlank { "POKANE-FAMILY" }

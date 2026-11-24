@@ -1,6 +1,15 @@
 # Keep data models for Firestore & local serialization
 -keep class ru.pokanevich.familybudget.data.** { *; }
 
+# Firebase Cloud Firestore & Anonymous Auth
+-keep class com.google.firebase.** { *; }
+-keep class com.google.firestore.** { *; }
+-dontwarn com.google.firebase.**
+-dontwarn com.google.firestore.**
+-dontwarn io.grpc.**
+-dontwarn io.perfmark.**
+-dontwarn javax.annotation.**
+
 # NotificationListenerService для автоучёта пушей Сбера и Mir Pay (биндится системой по имени из манифеста)
 -keep class ru.pokanevich.familybudget.service.BankPushListenerService { *; }
 
