@@ -12,7 +12,7 @@ class SecretVaultTest {
     @Test
     fun `encrypt and decrypt roundtrip produces prefixed ciphertext`() {
         val provider = SecretVault.inMemoryKeyProviderForTest()
-        val secret = "AIzaSyExampleKey1234567890"
+        val secret = "test-secret-api-value-12345"
 
         val encrypted = SecretVault.encrypt(secret, provider)
         assertTrue(SecretVault.isEncrypted(encrypted))
