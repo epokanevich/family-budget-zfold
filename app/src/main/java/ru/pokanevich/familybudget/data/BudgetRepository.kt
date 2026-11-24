@@ -1283,7 +1283,7 @@ class BudgetRepository private constructor(context: Context) {
             val now = System.currentTimeMillis()
             val signature = buildAmountSignature(amountRub)
             val candidates = dao.findRecentDuplicateCandidates(signature, now - SAME_DEVICE_DEDUP_WINDOW_MS)
-            val duplicate = findSameDeviceDuplicate(candidates, sourceType, merchant, rawText)
+            val duplicate = findSameDeviceDuplicate(candidates, sourceType, merchant, rawText, nowMs = now)
             if (duplicate != null) {
                 Log.i(
                     "BudgetRepository",
@@ -1345,7 +1345,11 @@ class BudgetRepository private constructor(context: Context) {
          */
         internal const val SAME_DEVICE_DEDUP_WINDOW_MS = 300_000L
 
-        private val BALANCE_MARKER_REGEX = Regex("(?:баланс|остаток|доступно)", RegexOption.IGNORE_CASE)
+        private val BALANCE_MARKER_REGEX = Regex(
+            "(?:баланс|остаток|доступно|в\\s+запасе|запас\\s+средств)",
+            RegexOption.IGNORE_CASE
+        )
+        private const val RAPID_SAME_TEXT_DUPLICATE_MS = 3_000L
 
         internal fun buildConfigSyncPlan(
             local: FamilyConfig,
@@ -1399,7 +1403,8 @@ class BudgetRepository private constructor(context: Context) {
             candidates: List<ExpenseEntity>,
             sourceType: String,
             merchant: String,
-            rawText: String
+            rawText: String,
+            nowMs: Long = System.currentTimeMillis()
         ): ExpenseEntity? = candidates.firstOrNull { existing ->
             if (existing.isDeleted) return@firstOrNull false
             if (existing.sourceType != sourceType) {
@@ -1413,7 +1418,9 @@ class BudgetRepository private constructor(context: Context) {
             val newText = normalizePushText(rawText)
             when {
                 existingText.isEmpty() || newText.isEmpty() -> false
-                existingText == newText -> BALANCE_MARKER_REGEX.containsMatchIn(newText)
+                existingText == newText ->
+                    BALANCE_MARKER_REGEX.containsMatchIn(newText) ||
+                        abs(nowMs - existing.createdAtEpochMs) <= RAPID_SAME_TEXT_DUPLICATE_MS
                 pushTextTemplate(existingText) == pushTextTemplate(newText) -> false
                 else -> MerchantMatcher.areCompatible(existing.merchant, merchant)
             }

@@ -101,7 +101,7 @@ object BankPushParser {
     )
 
     private val BALANCE_CUTOFF_REGEX = Regex(
-        "(?:баланс|доступно|остаток)\\s*:?",
+        "(?:[—–-]\\s*)?(?:баланс|доступно|остаток|в\\s+запасе|запас\\s+средств)\\s*:?",
         RegexOption.IGNORE_CASE
     )
 
@@ -140,15 +140,22 @@ object BankPushParser {
         RegexOption.IGNORE_CASE
     )
     private val TRAILING_CARD_SUFFIX_REGEX = Regex(
-        "(?:[.\\s,;—–•]+(?:(?:по|с|со)\\s+)?(?:карте|карта|картой|сч[её]ту|сч[её]та|сч[её]т|black|all\\s+airlines|drive|platinum|mir|мир|visa|mastercard)\\s*[•*]*\\s*\\d{4}[.\\s,;—–•]*|[.\\s,;—–•]+[•*]+\\s*\\d{4}[.\\s,;—–•]*)$",
+        "(?:[.\\s,;—–•]+(?:(?:по|с|со)\\s+)?(?:сч[её]т(?:у|а)?\\s+)?(?:карте|карта|картой|карты|сч[её]ту|сч[её]та|сч[её]т|black|all\\s+airlines|drive|platinum|mir|мир|visa|mastercard)\\s*(?:[•*·]+\\s*)+\\d{4}[.\\s,;—–•]*|[.\\s,;—–•]+(?:[•*·]+\\s*)+\\d{4}[.\\s,;—–•]*)$",
         RegexOption.IGNORE_CASE
     )
     private val TRAILING_BONUS_SUFFIX_REGEX = Regex(
         "[.\\s,;—–•]+(?:к[эе]шб[эе]к|бонус(?:ы|ов)?|спасибо)\\b.*$",
         RegexOption.IGNORE_CASE
     )
+    private val INLINE_DATETIME_REGEX = Regex(
+        "\\b\\d{2}\\.\\d{2}\\.\\d{2,4}(?:\\s*,\\s*|\\s+)\\d{1,2}:\\d{2}(?::\\d{2})?\\b"
+    )
+    private val PRE_AMOUNT_MERCHANT_REGEX = Regex(
+        "(?:покупк[аиу]|оплат[аыу](?:\\s+покупки)?|списани[ея]|плат[её]ж|перевод)\\s+(?:в|во|на)\\s+(.+)$",
+        RegexOption.IGNORE_CASE
+    )
     private val CARD_ONLY_RESIDUE_REGEX = Regex(
-        "^(?:(?:black|all\\s+airlines|drive|platinum|mir|мир|visa|mastercard|карта|сч[её]т)\\s*)?[•*]*\\s*\\d{0,4}$",
+        "^(?:(?:black|all\\s+airlines|drive|platinum|mir|мир|visa|mastercard|карта|карту|сберкарта|сч[её]т|сумму)\\s*)*(?:[•*·]+\\s*)*\\d{0,4}$",
         RegexOption.IGNORE_CASE
     )
     private val TITLE_STRIP_REGEX = Regex(
@@ -210,6 +217,7 @@ object BankPushParser {
 
     private fun cleanAfterAmount(rawAfterAmount: String): String {
         var cleaned = rawAfterAmount
+            .replace(INLINE_DATETIME_REGEX, " ")
             .replace(LEADING_PUNCT_REGEX, "")
             .replace(LEADING_PREPOSITION_REGEX, "")
             .replace(LEADING_CARD_PREFIX_REGEX, "")
@@ -218,11 +226,17 @@ object BankPushParser {
             .replace(TRAILING_BONUS_SUFFIX_REGEX, "")
             .replace(TRAILING_CARD_SUFFIX_REGEX, "")
             .replace(TRAILING_PUNCT_REGEX, "")
+            .replace(Regex("\\s+"), " ")
             .trim()
         if (CARD_ONLY_RESIDUE_REGEX.matches(cleaned)) {
             cleaned = ""
         }
         return cleaned
+    }
+
+    private fun extractPreAmountMerchant(prefixBeforeAmount: String): String {
+        val match = PRE_AMOUNT_MERCHANT_REGEX.find(prefixBeforeAmount.trim()) ?: return ""
+        return cleanAfterAmount(match.groupValues[1])
     }
 
     private fun fallbackMerchant(source: BankPushSource, isSelfTransfer: Boolean): String {
@@ -415,8 +429,13 @@ object BankPushParser {
 
         val isSelfTransfer = isExplicitSelfTransfer(lower)
 
-        // Извлекаем название магазина после суммы
+        // Извлекаем название магазина после суммы, либо перед суммой («оплачена покупка в Пятёрочка 1 034,33 ₽»)
         val afterAmount = cleanAfterAmount(textBeforeBalance.substring(match.range.last + 1))
+        val preAmountMerchant = if (afterAmount.length !in 2..60 && !isSelfTransfer) {
+            extractPreAmountMerchant(prefixBeforeAmount)
+        } else {
+            ""
+        }
 
         val cleanedTitle = title
             .replace(TITLE_STRIP_REGEX, "")
@@ -427,6 +446,7 @@ object BankPushParser {
 
         val merchant = when {
             afterAmount.length in 2..60 -> afterAmount
+            preAmountMerchant.length in 2..60 -> preAmountMerchant
             cleanedTitle.length in 2..45 -> cleanedTitle
             else -> fallbackMerchant(source, isSelfTransfer)
         }

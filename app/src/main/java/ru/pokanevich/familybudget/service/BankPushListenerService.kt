@@ -20,37 +20,7 @@ class BankPushListenerService : NotificationListenerService() {
          * Уведомления старше 5 минут игнорируются как при переподключении сервиса, так и при доставке.
          */
         internal const val STALE_NOTIFICATION_MS = BankPushTimeValidator.MAX_ALLOWED_DRIFT_MS
-        private const val MAX_PROCESSED_KEYS = 500
-        private val processedNotificationKeys = LinkedHashSet<String>()
-        private var persistedKeysLoaded = false
-
-        /**
-         * Возвращает true, если уведомление с таким dedupKey ещё не обрабатывалось.
-         * Последние 50 ключей сохраняются в SharedPreferences, поэтому перезапуск процесса
-         * (и повторная выдача activeNotifications в onListenerConnected) не сбрасывает защиту.
-         */
-        private fun markNotificationProcessedIfNew(prefs: FamilyPreferences, dedupKey: String): Boolean {
-            synchronized(processedNotificationKeys) {
-                if (!persistedKeysLoaded) {
-                    persistedKeysLoaded = true
-                    runCatching { processedNotificationKeys.addAll(prefs.recentPushDedupKeys) }
-                }
-                if (!processedNotificationKeys.add(dedupKey)) {
-                    return false
-                }
-                while (processedNotificationKeys.size > MAX_PROCESSED_KEYS) {
-                    val iterator = processedNotificationKeys.iterator()
-                    if (!iterator.hasNext()) break
-                    iterator.next()
-                    iterator.remove()
-                }
-                runCatching {
-                    prefs.recentPushDedupKeys =
-                        processedNotificationKeys.toList().takeLast(FamilyPreferences.MAX_PERSISTED_PUSH_DEDUP_KEYS)
-                }
-                return true
-            }
-        }
+        private val deduplicator = PushNotificationDeduplicator()
     }
 
     override fun onListenerConnected() {
@@ -85,6 +55,8 @@ class BankPushListenerService : NotificationListenerService() {
         if (sbn.isOngoing) return
         val packageName = sbn.packageName ?: return
         val notification = sbn.notification ?: return
+        // Групповые summary-уведомления Android дублируют текст последней операции с новым sbn.id
+        if ((notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0) return
         val extras = notification.extras ?: return
 
         val prefs = FamilyPreferences(applicationContext)
@@ -99,13 +71,22 @@ class BankPushListenerService : NotificationListenerService() {
         val subText = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()
             ?.takeIf { it.isNotBlank() }
         val lines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
-            ?.joinToString(" ") { it?.toString().orEmpty() }
-            ?.takeIf { it.isNotBlank() }
+            ?.mapNotNull { it?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }
+            .orEmpty()
 
-        val combinedBody = listOfNotNull(bigText ?: normalText, subText, lines)
-            .distinct()
-            .joinToString(" ")
-            .trim()
+        val primaryText = (bigText ?: normalText).orEmpty()
+        val combinedBody = when {
+            primaryText.isNotBlank() -> {
+                val withSub = listOfNotNull(primaryText, subText).distinct().joinToString(" ").trim()
+                if (BankPushParser.parseNotification(packageName, title, primaryText, enabledSources) != null) {
+                    primaryText
+                } else {
+                    withSub
+                }
+            }
+            lines.isNotEmpty() -> lines.last()
+            else -> subText.orEmpty()
+        }
 
         val nowMs = System.currentTimeMillis()
         val operationTimeMs = BankPushParser.extractOperationTimestampMs(
@@ -126,9 +107,6 @@ class BankPushListenerService : NotificationListenerService() {
             return
         }
 
-        val dedupKey = "${sbn.key ?: "$packageName:${sbn.id}"}|${sbn.postTime}"
-        if (!markNotificationProcessedIfNew(prefs, dedupKey)) return
-
         val parsed = BankPushParser.parseNotification(
             packageName = packageName,
             title = title,
@@ -140,6 +118,25 @@ class BankPushListenerService : NotificationListenerService() {
             prefs.appendPushLog("Пропуск ($packageName): $title | $combinedBody".take(120))
             return
         }
+
+        val slotKey = sbn.key ?: "$packageName:${sbn.tag.orEmpty()}:${sbn.id}"
+        val contentFingerprint = PushNotificationDeduplicator.buildContentFingerprint(parsed)
+        val isNewNotification = synchronized(deduplicator) {
+            deduplicator.ensureLoaded(prefs.recentPushDedupKeys)
+            val added = deduplicator.markIfNew(
+                slotKey = slotKey,
+                postTimeMs = sbn.postTime,
+                contentFingerprint = contentFingerprint,
+                nowMs = nowMs
+            )
+            if (added) {
+                runCatching {
+                    prefs.recentPushDedupKeys = deduplicator.exportPersistedLines()
+                }
+            }
+            added
+        }
+        if (!isNewNotification) return
 
         prefs.appendPushLog("Поймано ${parsed.amountRub} ₽ (${parsed.merchant}) [$packageName]")
 

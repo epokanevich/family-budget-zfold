@@ -700,4 +700,74 @@ class BankPushParserTest {
         assertEquals(1200.0, purchaseWithCashback!!.amountRub, 0.001)
         assertEquals("Пятёрочка", purchaseWithCashback.merchant)
     }
+
+    @Test
+    fun parseNotification_modernSberVZapaseFormat_extractsMerchantWithoutBalanceLeak() {
+        val pyaterochka = BankPushParser.parseNotification(
+            packageName = "ru.sberbankmobile",
+            title = "СберБанк Онлайн",
+            text = "🎉 Оп! И оплачена покупка в Пятёрочка 1 034,33 ₽ — В запасе: 951 971,42 ₽ Счёт карты МИР •• 8814"
+        )
+        assertNotNull(pyaterochka)
+        assertEquals(1034.33, pyaterochka!!.amountRub, 0.001)
+        assertEquals("Пятёрочка", pyaterochka.merchant)
+
+        val beryoza = BankPushParser.parseNotification(
+            packageName = "ru.sberbankmobile",
+            title = "СберБанк Онлайн",
+            text = "👍 Топовая покупка в Берёза у дома 199 ₽ — В запасе: 951 772,42 ₽ Счёт карты МИР •• 8814"
+        )
+        assertNotNull(beryoza)
+        assertEquals(199.0, beryoza!!.amountRub, 0.001)
+        assertEquals("Берёза у дома", beryoza.merchant)
+    }
+
+    @Test
+    fun parseNotification_modernMirPayWithDateAndSpacedBullets_fallsBackCleanly() {
+        val mirPay = BankPushParser.parseNotification(
+            packageName = "ru.nspk.mirpay",
+            title = "Mir Pay",
+            text = "Оплата покупки Сумма 767 ₽. 17.11.2026, 13:25. Карта Mir • • • • 3538"
+        )
+        assertNotNull(mirPay)
+        assertEquals(767.0, mirPay!!.amountRub, 0.001)
+        assertEquals("Оплата через Mir Pay", mirPay.merchant)
+        assertEquals("PUSH_MIRPAY", mirPay.sourceType)
+    }
+
+    @Test
+    fun findSameDeviceDuplicate_detectsRepeatedSberVZapaseAndRapidSameText() {
+        val now = 1_794_920_000_000L
+        val sberExisting = ru.pokanevich.familybudget.data.ExpenseEntity(
+            id = "sber-dup-1",
+            amountRub = 199.0,
+            merchant = "Берёза у дома",
+            sourceType = "PUSH_SBER",
+            createdAtEpochMs = now,
+            updatedAtEpochMs = now,
+            rawPushOrQrText = "👍 Топовая покупка в Берёза у дома 199 ₽ — В запасе: 951 772,42 ₽",
+            dedupSignature = "AMT_199.00"
+        )
+        val dup1 = ru.pokanevich.familybudget.data.BudgetRepository.findSameDeviceDuplicate(
+            candidates = listOf(sberExisting),
+            sourceType = "PUSH_SBER",
+            merchant = "Берёза у дома",
+            rawText = "👍 Топовая покупка в Берёза у дома 199 ₽ — В запасе: 951 772,42 ₽",
+            nowMs = now + 20_000L
+        )
+        assertNotNull(dup1)
+
+        val noBalanceExisting = sberExisting.copy(
+            id = "sber-nobal",
+            rawPushOrQrText = "Покупка 199 ₽ Берёза у дома"
+        )
+        val rapidDup = ru.pokanevich.familybudget.data.BudgetRepository.findSameDeviceDuplicate(
+            candidates = listOf(noBalanceExisting),
+            sourceType = "PUSH_SBER",
+            merchant = "Берёза у дома",
+            rawText = "Покупка 199 ₽ Берёза у дома",
+            nowMs = now + 1_500L
+        )
+        assertNotNull(rapidDup)
+    }
 }

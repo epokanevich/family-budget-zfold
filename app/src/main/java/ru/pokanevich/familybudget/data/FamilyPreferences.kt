@@ -313,7 +313,7 @@ class FamilyPreferences(context: Context) : PinLockStorage {
     }
 
     companion object {
-        const val MAX_PERSISTED_PUSH_DEDUP_KEYS = 50
+        const val MAX_PERSISTED_PUSH_DEDUP_KEYS = 100
         private const val KEY_GEMINI_CLEARED = "gemini_api_key_cleared"
         private const val KEY_RECENT_PUSH_DEDUP_KEYS = "recent_push_dedup_keys"
         private const val KEY_ENABLED_BANK_PUSH_SOURCES = "enabled_bank_push_sources"
