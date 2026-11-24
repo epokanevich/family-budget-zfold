@@ -1340,11 +1340,10 @@ class BudgetRepository private constructor(context: Context) {
         internal const val CROSS_DEVICE_DEDUP_WINDOW_MS = 90_000L
 
         /**
-         * Окно дедупа пушей на одном устройстве. Строго больше STALE_NOTIFICATION_MS (90 сек) в
-         * BankPushListenerService: уведомление из шторки, повторно обработанное после перезапуска сервиса,
-         * гарантированно попадает в это окно и не «проскакивает» между окнами.
+         * Окно дедупа пушей на одном устройстве (>= 5 минут, покрывает допустимый дрифт
+         * [ru.pokanevich.familybudget.service.BankPushTimeValidator.MAX_ALLOWED_DRIFT_MS]).
          */
-        internal const val SAME_DEVICE_DEDUP_WINDOW_MS = 120_000L
+        internal const val SAME_DEVICE_DEDUP_WINDOW_MS = 300_000L
 
         private val BALANCE_MARKER_REGEX = Regex("(?:баланс|остаток|доступно)", RegexOption.IGNORE_CASE)
 

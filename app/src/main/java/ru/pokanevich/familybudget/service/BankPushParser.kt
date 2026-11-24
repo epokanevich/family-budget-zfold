@@ -2,6 +2,11 @@ package ru.pokanevich.familybudget.service
 
 import ru.pokanevich.familybudget.data.BankPushSource
 import ru.pokanevich.familybudget.data.OperationType
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.ZoneId
+import kotlin.math.abs
 
 data class ParsedBankExpense(
     val amountRub: Double,
@@ -231,6 +236,103 @@ object BankPushParser {
             BankPushSource.OZON -> "Покупка по карте Ozon Банк"
         }
     }
+
+    private val FULL_DMY_DATETIME_REGEX = Regex(
+        "\\b(\\d{2})\\.(\\d{2})\\.(\\d{4})(?:\\s*,\\s*|\\s+)([01]?\\d|2[0-3]):([0-5]\\d)(?::([0-5]\\d))?\\b"
+    )
+    private val SHORT_DMY_DATETIME_REGEX = Regex(
+        "\\b(\\d{2})\\.(\\d{2})\\.(\\d{2})(?:\\s*,\\s*|\\s+)([01]?\\d|2[0-3]):([0-5]\\d)(?::([0-5]\\d))?\\b"
+    )
+    private val ISO_DATETIME_REGEX = Regex(
+        "\\b(\\d{4})-(\\d{2})-(\\d{2})[T\\s]([01]?\\d|2[0-3]):([0-5]\\d)(?::([0-5]\\d))?\\b"
+    )
+    private val TIME_ONLY_REGEX = Regex(
+        "(?<![0-9.,:/-])([01]?\\d|2[0-3]):([0-5]\\d)(?::([0-5]\\d))?(?![0-9.,:/-])"
+    )
+
+    /**
+     * Извлекает метку времени самой операции из заголовка и текста банковского пуша/SMS.
+     * Возвращает `null`, если дата/время операции в тексте не указаны.
+     */
+    fun extractOperationTimestampMs(
+        title: String,
+        text: String,
+        nowMs: Long = System.currentTimeMillis(),
+        zoneId: ZoneId = ZoneId.systemDefault()
+    ): Long? {
+        val combined = listOf(title, text)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+            .replace('\u00A0', ' ')
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        if (combined.isEmpty()) return null
+
+        FULL_DMY_DATETIME_REGEX.find(combined)?.let { m ->
+            parseDateTimeGroup(
+                year = m.groupValues[3].toInt(),
+                month = m.groupValues[2].toInt(),
+                day = m.groupValues[1].toInt(),
+                hour = m.groupValues[4].toInt(),
+                minute = m.groupValues[5].toInt(),
+                second = m.groupValues[6].toIntOrNull() ?: 0,
+                zoneId = zoneId
+            )?.let { return it }
+        }
+
+        SHORT_DMY_DATETIME_REGEX.find(combined)?.let { m ->
+            parseDateTimeGroup(
+                year = 2000 + m.groupValues[3].toInt(),
+                month = m.groupValues[2].toInt(),
+                day = m.groupValues[1].toInt(),
+                hour = m.groupValues[4].toInt(),
+                minute = m.groupValues[5].toInt(),
+                second = m.groupValues[6].toIntOrNull() ?: 0,
+                zoneId = zoneId
+            )?.let { return it }
+        }
+
+        ISO_DATETIME_REGEX.find(combined)?.let { m ->
+            parseDateTimeGroup(
+                year = m.groupValues[1].toInt(),
+                month = m.groupValues[2].toInt(),
+                day = m.groupValues[3].toInt(),
+                hour = m.groupValues[4].toInt(),
+                minute = m.groupValues[5].toInt(),
+                second = m.groupValues[6].toIntOrNull() ?: 0,
+                zoneId = zoneId
+            )?.let { return it }
+        }
+
+        TIME_ONLY_REGEX.find(combined)?.let { m ->
+            val hour = m.groupValues[1].toInt()
+            val minute = m.groupValues[2].toInt()
+            val second = m.groupValues[3].toIntOrNull() ?: 0
+            val today = Instant.ofEpochMilli(nowMs).atZone(zoneId).toLocalDate()
+            val localTime = runCatching { LocalTime.of(hour, minute, second) }.getOrNull() ?: return null
+            val candidates = listOf(today.minusDays(1), today, today.plusDays(1)).map { day ->
+                LocalDateTime.of(day, localTime).atZone(zoneId).toInstant().toEpochMilli()
+            }
+            return candidates.minByOrNull { abs(it - nowMs) }
+        }
+
+        return null
+    }
+
+    private fun parseDateTimeGroup(
+        year: Int,
+        month: Int,
+        day: Int,
+        hour: Int,
+        minute: Int,
+        second: Int,
+        zoneId: ZoneId
+    ): Long? = runCatching {
+        LocalDateTime.of(year, month, day, hour, minute, second)
+            .atZone(zoneId)
+            .toInstant()
+            .toEpochMilli()
+    }.getOrNull()
 
     fun isPackageEligible(packageName: String, title: String): Boolean =
         isPackageEligible(packageName, title, BankPushSource.DEFAULT_ENABLED)
