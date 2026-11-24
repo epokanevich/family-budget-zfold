@@ -8,3 +8,21 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Antigravity Vibecoding Artifacts
+ARGON_PROMPT.md
+.agents/tmp/
+brain/
+
+
+# Local agent/audit & secret artifacts
+.agents/
+AGENTS.md
+graphify-out/
+build_outputs/
+*.apk
+*.aab
+*.jks
+*.keystore
+app/google-services.json
+app/src/*/google-services.json
