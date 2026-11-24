@@ -123,11 +123,24 @@ class FamilyPreferences(context: Context) : PinLockStorage {
         }
 
     var familySpaceCode: String
-        get() = safeGetString("family_space_code", defaultFamilySpaceCode)
-        set(value) = prefs.edit().putString("family_space_code", value.trim().uppercase()).apply()
+        get() = if (isSpaceCodeLocked) {
+            normalizeFamilyCode(defaultFamilySpaceCode)
+        } else {
+            safeGetString("family_space_code", defaultFamilySpaceCode)
+        }
+        set(value) {
+            val target = if (isSpaceCodeLocked) {
+                normalizeFamilyCode(defaultFamilySpaceCode)
+            } else {
+                value.trim().uppercase()
+            }
+            prefs.edit().putString("family_space_code", target).apply()
+        }
 
     var monthlyBudgetRub: Double
-        get() = runCatching { prefs.getFloat("monthly_budget_rub", 200000f).toDouble() }.getOrDefault(200000.0)
+        get() = runCatching {
+            prefs.getFloat("monthly_budget_rub", defaultMonthlyBudgetRub.toFloat()).toDouble()
+        }.getOrDefault(defaultMonthlyBudgetRub)
         set(value) = prefs.edit().putFloat("monthly_budget_rub", value.toFloat()).apply()
 
     var autoConfirmBankPush: Boolean
@@ -168,13 +181,16 @@ class FamilyPreferences(context: Context) : PinLockStorage {
         get() {
             val explicitlyCleared = runCatching { prefs.getBoolean(KEY_GEMINI_CLEARED, false) }.getOrDefault(false)
             if (explicitlyCleared) return ""
-            return safeGetString("gemini_api_key", BuildConfig.DEFAULT_GEMINI_API_KEY)
-                .trim()
-                .ifBlank { BuildConfig.DEFAULT_GEMINI_API_KEY }
+            val raw = safeGetString("gemini_api_key", "")
+            val decrypted = SecretVault.readAndMigrateIfPlaintext(raw) { encrypted ->
+                prefs.edit().putString("gemini_api_key", encrypted).apply()
+            }
+            return decrypted.trim().ifBlank { BuildConfig.DEFAULT_GEMINI_API_KEY }
         }
         set(value) {
             val trimmed = value.trim()
-            val editor = prefs.edit().putString("gemini_api_key", trimmed)
+            val stored = SecretVault.encrypt(trimmed)
+            val editor = prefs.edit().putString("gemini_api_key", stored)
             if (trimmed.isNotEmpty()) {
                 editor.remove(KEY_GEMINI_CLEARED)
             }
@@ -194,10 +210,17 @@ class FamilyPreferences(context: Context) : PinLockStorage {
         set(value) = prefs.edit().putString("theme_mode", value).apply()
 
     var githubSyncToken: String
-        get() = safeGetString("github_sync_token", BuildConfig.DEFAULT_SYNC_TOKEN)
-            .trim()
-            .ifBlank { BuildConfig.DEFAULT_SYNC_TOKEN }
-        set(value) = prefs.edit().putString("github_sync_token", value.trim()).apply()
+        get() {
+            val raw = safeGetString("github_sync_token", "")
+            val decrypted = SecretVault.readAndMigrateIfPlaintext(raw) { encrypted ->
+                prefs.edit().putString("github_sync_token", encrypted).apply()
+            }
+            return decrypted.trim().ifBlank { BuildConfig.DEFAULT_SYNC_TOKEN }
+        }
+        set(value) {
+            val stored = SecretVault.encrypt(value)
+            prefs.edit().putString("github_sync_token", stored).apply()
+        }
 
     val pushDebugLog: String
         get() = safeGetString("push_debug_log", "")
@@ -346,6 +369,12 @@ class FamilyPreferences(context: Context) : PinLockStorage {
 
         val isSoloProfile: Boolean
             get() = BuildConfig.IS_SOLO_BUDGET_PROFILE
+
+        val isSpaceCodeLocked: Boolean
+            get() = BuildConfig.IS_SPACE_CODE_LOCKED
+
+        val defaultMonthlyBudgetRub: Double
+            get() = BuildConfig.DEFAULT_MONTHLY_BUDGET_RUB.takeIf { it.isFinite() && it > 0.0 } ?: 200000.0
 
         fun normalizeFamilyCode(raw: String): String =
             raw.trim().ifBlank { defaultFamilySpaceCode }.replace(Regex("[^A-Za-z0-9_-]"), "_")

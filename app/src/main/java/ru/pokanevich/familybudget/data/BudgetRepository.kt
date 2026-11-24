@@ -22,6 +22,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
+import ru.pokanevich.familybudget.BuildConfig
 import ru.pokanevich.familybudget.widget.BudgetWidgetProvider
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -205,9 +206,9 @@ class BudgetRepository private constructor(context: Context) {
                     .onFailure { err ->
                         if (err is CancellationException) throw err
                         if (err is SyncGuardException) {
-                            Log.e("BudgetRepository", "Cloud sync blocked: ${err.message}")
+                            if (BuildConfig.DEBUG) Log.e("BudgetRepository", "Cloud sync blocked: ${err.message}")
                         } else {
-                            Log.w("BudgetRepository", "Cloud sync offline: ${err.message}")
+                            if (BuildConfig.DEBUG) Log.w("BudgetRepository", "Cloud sync offline: ${err.message}")
                         }
                         _syncState.value = SyncState.OFFLINE_READY
                     }
@@ -510,7 +511,7 @@ class BudgetRepository private constructor(context: Context) {
                     cachedConfigSha = null
                     cachedRemoteConfig = null
                     if (attempt == 0) {
-                        Log.w("BudgetRepository", "GitHub Config PUT HTTP 409 conflict, retrying sync cycle immediately")
+                        if (BuildConfig.DEBUG) Log.w("BudgetRepository", "GitHub Config PUT HTTP 409 conflict, retrying sync cycle immediately")
                         continue
                     }
                     throw IllegalStateException("GitHub Config PUT HTTP $putCode")
@@ -574,7 +575,7 @@ class BudgetRepository private constructor(context: Context) {
                     cachedEtag = null
                     cachedRemoteSha = null
                     if (attempt == 0) {
-                        Log.w("BudgetRepository", "GitHub PUT HTTP 409 conflict, retrying sync cycle immediately")
+                        if (BuildConfig.DEBUG) Log.w("BudgetRepository", "GitHub PUT HTTP 409 conflict, retrying sync cycle immediately")
                         continue
                     }
                     throw IllegalStateException("GitHub PUT HTTP $putCode")
@@ -1315,10 +1316,12 @@ class BudgetRepository private constructor(context: Context) {
                 val candidates = dao.findRecentDuplicateCandidates(signature, now - SAME_DEVICE_DEDUP_WINDOW_MS)
                 val duplicate = findSameDeviceDuplicate(candidates, sourceType, merchant, rawText, nowMs = now)
                 if (duplicate != null) {
-                    Log.i(
-                        "BudgetRepository",
-                        "Duplicate push ignored: $signature $sourceType ($merchant) ~ ${duplicate.sourceType} (${duplicate.merchant})"
-                    )
+                    if (BuildConfig.DEBUG) {
+                        Log.i(
+                            "BudgetRepository",
+                            "Duplicate push ignored: source=$sourceType existing=${duplicate.sourceType}"
+                        )
+                    }
                     return@withLock false
                 }
 

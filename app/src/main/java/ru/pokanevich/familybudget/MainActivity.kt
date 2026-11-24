@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
+import android.view.WindowManager
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -160,8 +161,18 @@ class MainActivity : FragmentActivity() {
             val lifecycleOwner = LocalLifecycleOwner.current
 
             val isLocked by pinManager.isLocked.collectAsState()
+            val isAppLockEnabled by pinManager.isAppLockEnabled.collectAsState()
             val isBiometricEnabled by pinManager.isBiometricEnabled.collectAsState()
             val lockSessionId by pinManager.lockSessionId.collectAsState()
+
+            DisposableEffect(isAppLockEnabled, isLocked) {
+                if (isAppLockEnabled || isLocked) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                }
+                onDispose {}
+            }
 
             var selectedTab by rememberSaveable { mutableStateOf(0) }
             var selectedPeriodName by rememberSaveable { mutableStateOf(BudgetPeriod.MONTH.name) }
@@ -336,21 +347,48 @@ fun FamilyBudgetApp(
         PeriodCalculator.buildWindow(selectedPeriod, anchorEpochMs)
     }
 
-    // Dialog / BottomSheet states
-    var showAddEditSheet by remember { mutableStateOf(false) }
-    var editingExpense by remember { mutableStateOf<ExpenseEntity?>(null) }
-    var inspectingExpense by remember { mutableStateOf<ExpenseEntity?>(null) }
-    var showQrScanner by remember { mutableStateOf(false) }
-    var showSettingsSheet by remember { mutableStateOf(false) }
-    var showCategoriesAndLimitsSheet by remember { mutableStateOf(false) }
-    var showRecurringPaymentsSheet by remember { mutableStateOf(false) }
-    var showSavingsGoalsSheet by remember { mutableStateOf(false) }
+    // Dialog / BottomSheet states (переживают смену экрана Z Fold и конфигураций)
+    var showAddEditSheet by rememberSaveable { mutableStateOf(false) }
+    var editingExpenseId by rememberSaveable { mutableStateOf<String?>(null) }
+    var fallbackEditingExpense by remember { mutableStateOf<ExpenseEntity?>(null) }
+    val editingExpense = remember(editingExpenseId, allLiveExpenses, fallbackEditingExpense) {
+        val id = editingExpenseId
+        if (id == null) {
+            null
+        } else {
+            allLiveExpenses.firstOrNull { it.id == id } ?: fallbackEditingExpense?.takeIf { it.id == id }
+        }
+    }
+    var inspectingExpenseId by rememberSaveable { mutableStateOf<String?>(null) }
+    var fallbackInspectingExpense by remember { mutableStateOf<ExpenseEntity?>(null) }
+    val inspectingExpense = remember(inspectingExpenseId, allLiveExpenses, fallbackInspectingExpense) {
+        val id = inspectingExpenseId
+        if (id == null) {
+            null
+        } else {
+            allLiveExpenses.firstOrNull { it.id == id } ?: fallbackInspectingExpense?.takeIf { it.id == id }
+        }
+    }
+    var showQrScanner by rememberSaveable { mutableStateOf(false) }
+    var showSettingsSheet by rememberSaveable { mutableStateOf(false) }
+    var showCategoriesAndLimitsSheet by rememberSaveable { mutableStateOf(false) }
+    var showRecurringPaymentsSheet by rememberSaveable { mutableStateOf(false) }
+    var showSavingsGoalsSheet by rememberSaveable { mutableStateOf(false) }
     var isAiChatOpen by rememberSaveable { mutableStateOf(false) }
     var aiChatMessages by remember { mutableStateOf<List<AiChatMessage>>(emptyList()) }
     var isAiChatSending by remember { mutableStateOf(false) }
     var aiChatModelUsed by remember { mutableStateOf(AiBudgetAdvisor.lastUsedModel()) }
-    var prefilledAmount by remember { mutableStateOf("") }
-    var prefilledMerchant by remember { mutableStateOf("") }
+    var prefilledAmount by rememberSaveable { mutableStateOf("") }
+    var prefilledMerchant by rememberSaveable { mutableStateOf("") }
+
+    val setEditingExpense: (ExpenseEntity?) -> Unit = { target ->
+        editingExpenseId = target?.id
+        fallbackEditingExpense = target
+    }
+    val setInspectingExpense: (ExpenseEntity?) -> Unit = { target ->
+        inspectingExpenseId = target?.id
+        fallbackInspectingExpense = target
+    }
 
     val sendAiChatQuestion: (String) -> Unit = { rawQuestion ->
         val cleanQuestion = rawQuestion.trim()
@@ -401,7 +439,7 @@ fun FamilyBudgetApp(
 
     LaunchedEffect(openAddSheetTrigger) {
         if (openAddSheetTrigger) {
-            editingExpense = null
+            setEditingExpense(null)
             prefilledAmount = ""
             prefilledMerchant = ""
             showAddEditSheet = true
@@ -504,7 +542,7 @@ fun FamilyBudgetApp(
                             AuthorAvatarCircle(authorName = currentUserName, size = 36.dp)
                             Column {
                                 Text(
-                                    text = "Семейный котёл",
+                                    text = if (FamilyPreferences.isSoloProfile) "Мой бюджет" else "Семейный котёл",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
@@ -545,7 +583,7 @@ fun FamilyBudgetApp(
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Settings,
-                                    contentDescription = "Настройки семьи",
+                                    contentDescription = if (FamilyPreferences.isSoloProfile) "Настройки бюджета" else "Настройки семьи",
                                     tint = palette.textPrimary,
                                     modifier = Modifier.size(19.dp)
                                 )
@@ -559,7 +597,7 @@ fun FamilyBudgetApp(
             if (!(isUnfoldedFoldable && isAiChatOpen)) {
                 ExtendedFloatingActionButton(
                     onClick = {
-                        editingExpense = null
+                        setEditingExpense(null)
                         prefilledAmount = ""
                         prefilledMerchant = ""
                         showAddEditSheet = true
@@ -657,9 +695,9 @@ fun FamilyBudgetApp(
                         onDismissPending = { exp ->
                             scope.launch { repository.softDeleteExpense(exp) }
                         },
-                        onExpenseClick = { exp -> inspectingExpense = exp },
+                        onExpenseClick = { exp -> setInspectingExpense(exp) },
                         onAddClick = {
-                            editingExpense = null
+                            setEditingExpense(null)
                             prefilledAmount = ""
                             prefilledMerchant = ""
                             showAddEditSheet = true
@@ -748,9 +786,9 @@ fun FamilyBudgetApp(
                         onDismissPending = { exp ->
                             scope.launch { repository.softDeleteExpense(exp) }
                         },
-                        onExpenseClick = { exp -> inspectingExpense = exp },
+                        onExpenseClick = { exp -> setInspectingExpense(exp) },
                         onAddClick = {
-                            editingExpense = null
+                            setEditingExpense(null)
                             prefilledAmount = ""
                             prefilledMerchant = ""
                             showAddEditSheet = true
@@ -807,19 +845,19 @@ fun FamilyBudgetApp(
 
     // Expense Details Sheet
     if (inspectingExpense != null) {
-        val target = inspectingExpense!!
+        val target = inspectingExpense
         ExpenseDetailSheet(
             expense = target,
             allExpenses = confirmedExpenses,
-            onSelectExpense = { sibling -> inspectingExpense = sibling },
-            onDismiss = { inspectingExpense = null },
+            onSelectExpense = { sibling -> setInspectingExpense(sibling) },
+            onDismiss = { setInspectingExpense(null) },
             onEdit = { exp ->
-                inspectingExpense = null
-                editingExpense = exp
+                setInspectingExpense(null)
+                setEditingExpense(exp)
                 showAddEditSheet = true
             },
             onDelete = { exp ->
-                inspectingExpense = null
+                setInspectingExpense(null)
                 scope.launch {
                     repository.softDeleteExpense(exp)
                     val res = snackbarHostState.showSnackbar(
@@ -849,7 +887,7 @@ fun FamilyBudgetApp(
             },
             onDismiss = {
                 showAddEditSheet = false
-                editingExpense = null
+                setEditingExpense(null)
             },
             onSave = { amount, merchant, categoryId, author, note, operationType ->
                 val existing = editingExpense
@@ -879,7 +917,7 @@ fun FamilyBudgetApp(
                         )
                     }
                     showAddEditSheet = false
-                    editingExpense = null
+                    setEditingExpense(null)
                     prefilledAmount = ""
                     prefilledMerchant = ""
                 }
@@ -897,7 +935,7 @@ fun FamilyBudgetApp(
                         sourceType = if (prefilledAmount.isNotEmpty()) "QR_RECEIPT" else "MANUAL"
                     )
                     showAddEditSheet = false
-                    editingExpense = null
+                    setEditingExpense(null)
                     prefilledAmount = ""
                     prefilledMerchant = ""
                 }
@@ -912,7 +950,7 @@ fun FamilyBudgetApp(
             onDismiss = { showQrScanner = false },
             onReceiptDetected = { qrData ->
                 showQrScanner = false
-                editingExpense = null
+                setEditingExpense(null)
                 prefilledAmount = qrData.amountRub.toString()
                 prefilledMerchant = "Чек ФНС"
                 showAddEditSheet = true

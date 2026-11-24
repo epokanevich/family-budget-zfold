@@ -6,6 +6,7 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import ru.pokanevich.familybudget.data.FamilyPreferences
 
 enum class BiometricAvailability {
     AVAILABLE,
@@ -69,7 +70,7 @@ fun showBiometricUnlockPrompt(
     )
 
     val promptInfo = BiometricPrompt.PromptInfo.Builder()
-        .setTitle("Вход в Семейный котёл")
+        .setTitle(if (FamilyPreferences.isSoloProfile) "Вход в Мой бюджет" else "Вход в Семейный котёл")
         .setSubtitle("Подтвердите личность по биометрии")
         .setNegativeButtonText("Ввести PIN-код")
         .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_WEAK)

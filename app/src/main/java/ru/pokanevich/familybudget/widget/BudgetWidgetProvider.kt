@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import ru.pokanevich.familybudget.BuildConfig
 import ru.pokanevich.familybudget.MainActivity
 import ru.pokanevich.familybudget.R
 import ru.pokanevich.familybudget.data.AppDatabase
@@ -33,7 +34,7 @@ class BudgetWidgetProvider : AppWidgetProvider() {
             try {
                 updateWidgets(appContext, appWidgetManager, appWidgetIds)
             } catch (t: Throwable) {
-                Log.w(TAG, "Failed to update widget", t)
+                if (BuildConfig.DEBUG) Log.w(TAG, "Failed to update widget", t)
             } finally {
                 pendingResult.finish()
             }
@@ -52,7 +53,7 @@ class BudgetWidgetProvider : AppWidgetProvider() {
             try {
                 updateWidgets(appContext, appWidgetManager, intArrayOf(appWidgetId))
             } catch (t: Throwable) {
-                Log.w(TAG, "Failed to resize widget", t)
+                if (BuildConfig.DEBUG) Log.w(TAG, "Failed to resize widget", t)
             } finally {
                 pendingResult.finish()
             }
@@ -81,7 +82,7 @@ class BudgetWidgetProvider : AppWidgetProvider() {
                 try {
                     updateWidgets(appContext, appWidgetManager, appWidgetIds)
                 } catch (t: Throwable) {
-                    Log.w(TAG, "Failed to refresh widget", t)
+                    if (BuildConfig.DEBUG) Log.w(TAG, "Failed to refresh widget", t)
                 }
             }
         }

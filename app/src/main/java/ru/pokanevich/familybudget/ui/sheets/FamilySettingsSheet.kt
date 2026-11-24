@@ -180,7 +180,7 @@ fun FamilySettingsSheet(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text(
-                text = "Настройки семьи",
+                text = if (FamilyPreferences.isSoloProfile) "Настройки бюджета" else "Настройки семьи",
                 style = MaterialTheme.typography.titleLarge,
                 color = palette.textPrimary
             )
@@ -246,25 +246,43 @@ fun FamilySettingsSheet(
                     }
                 }
 
-                OutlinedTextField(
-                    value = code,
-                    onValueChange = { code = it },
-                    label = { Text("Общий код семьи") },
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = palette.accentEmerald,
-                        unfocusedBorderColor = palette.outlineSubtle
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                if (FamilyPreferences.normalizeFamilyCode(code) != FamilyPreferences.normalizeFamilyCode(familySpaceCode)) {
-                    Text(
-                        text = "При сохранении нового кода локальный кэш будет очищен, чтобы не смешать базы разных семей.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = palette.accentAmber
+                if (FamilyPreferences.isSpaceCodeLocked) {
+                    OutlinedTextField(
+                        value = FamilyPreferences.defaultFamilySpaceCode,
+                        onValueChange = {},
+                        enabled = false,
+                        readOnly = true,
+                        label = { Text("Изолированный контур") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            disabledTextColor = palette.textSecondary,
+                            disabledBorderColor = palette.outlineSubtle,
+                            disabledLabelColor = palette.textMuted
+                        ),
+                        modifier = Modifier.fillMaxWidth()
                     )
+                } else {
+                    OutlinedTextField(
+                        value = code,
+                        onValueChange = { code = it },
+                        label = { Text("Общий код семьи") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = palette.accentEmerald,
+                            unfocusedBorderColor = palette.outlineSubtle
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    if (FamilyPreferences.normalizeFamilyCode(code) != FamilyPreferences.normalizeFamilyCode(familySpaceCode)) {
+                        Text(
+                            text = "При сохранении нового кода локальный кэш будет очищен, чтобы не смешать базы разных семей.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.accentAmber
+                        )
+                    }
                 }
 
                 OutlinedTextField(
@@ -877,10 +895,16 @@ fun FamilySettingsSheet(
 
             Button(
                 onClick = {
-                    val parsedBudget = budget.toDoubleOrNull()?.takeIf { it > 0 } ?: 120000.0
+                    val parsedBudget = budget.toDoubleOrNull()?.takeIf { it > 0 }
+                        ?: FamilyPreferences.defaultMonthlyBudgetRub
+                    val resolvedCode = if (FamilyPreferences.isSpaceCodeLocked) {
+                        FamilyPreferences.defaultFamilySpaceCode
+                    } else {
+                        code.trim().ifBlank { FamilyPreferences.defaultFamilySpaceCode }
+                    }
                     onSave(
                         name,
-                        code.trim().ifBlank { "POKANE-FAMILY" },
+                        resolvedCode,
                         parsedBudget,
                         autoConfirm,
                         selectedBankSources,

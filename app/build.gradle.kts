@@ -46,6 +46,9 @@ android {
         buildConfigField("String", "DEFAULT_FAMILY_SPACE_CODE", "\"$defaultFamilyCode\"")
         buildConfigField("String", "DEFAULT_USER_NAME", "\"$defaultUserName\"")
         buildConfigField("Boolean", "IS_SOLO_BUDGET_PROFILE", isSoloProfile.toString())
+        buildConfigField("Boolean", "IS_SPACE_CODE_LOCKED", "false")
+        buildConfigField("Double", "DEFAULT_MONTHLY_BUDGET_RUB", "200000.0")
+        buildConfigField("String", "SYNC_CONTOUR", "\"FAMILY\"")
 
         vectorDrawables {
             useSupportLibrary = true
