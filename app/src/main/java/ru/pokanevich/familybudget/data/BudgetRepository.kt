@@ -8,6 +8,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -1282,6 +1283,24 @@ class BudgetRepository private constructor(context: Context) {
      * Защита от дублей на одном устройстве (окно [SAME_DEVICE_DEDUP_WINDOW_MS]) учитывает sourceType,
      * нормализованный мерчант и текст пуша — см. [findSameDeviceDuplicate].
      */
+    fun enqueueBankNotification(
+        amountRub: Double,
+        merchant: String,
+        sourceType: String,
+        rawText: String,
+        suggestedOperationType: String = OperationType.EXPENSE.name
+    ) {
+        scope.launch {
+            ingestBankNotification(
+                amountRub = amountRub,
+                merchant = merchant,
+                sourceType = sourceType,
+                rawText = rawText,
+                suggestedOperationType = suggestedOperationType
+            )
+        }
+    }
+
     suspend fun ingestBankNotification(
         amountRub: Double,
         merchant: String,
@@ -1289,53 +1308,55 @@ class BudgetRepository private constructor(context: Context) {
         rawText: String,
         suggestedOperationType: String = OperationType.EXPENSE.name
     ) {
-        val inserted = ingestMutex.withLock {
-            val now = System.currentTimeMillis()
-            val signature = buildAmountSignature(amountRub)
-            val candidates = dao.findRecentDuplicateCandidates(signature, now - SAME_DEVICE_DEDUP_WINDOW_MS)
-            val duplicate = findSameDeviceDuplicate(candidates, sourceType, merchant, rawText, nowMs = now)
-            if (duplicate != null) {
-                Log.i(
-                    "BudgetRepository",
-                    "Duplicate push ignored: $signature $sourceType ($merchant) ~ ${duplicate.sourceType} (${duplicate.merchant})"
-                )
-                return@withLock false
-            }
+        val inserted = withContext(NonCancellable) {
+            ingestMutex.withLock {
+                val now = System.currentTimeMillis()
+                val signature = buildAmountSignature(amountRub)
+                val candidates = dao.findRecentDuplicateCandidates(signature, now - SAME_DEVICE_DEDUP_WINDOW_MS)
+                val duplicate = findSameDeviceDuplicate(candidates, sourceType, merchant, rawText, nowMs = now)
+                if (duplicate != null) {
+                    Log.i(
+                        "BudgetRepository",
+                        "Duplicate push ignored: $signature $sourceType ($merchant) ~ ${duplicate.sourceType} (${duplicate.merchant})"
+                    )
+                    return@withLock false
+                }
 
-            val normalizedOpType = runCatching {
-                OperationType.valueOf(suggestedOperationType.trim().uppercase())
-            }.getOrDefault(OperationType.EXPENSE)
+                val normalizedOpType = runCatching {
+                    OperationType.valueOf(suggestedOperationType.trim().uppercase())
+                }.getOrDefault(OperationType.EXPENSE)
 
-            val registrySnapshot = synchronized(configLock) { _categoryRegistry.value }
-            val guessedCategory = if (normalizedOpType == OperationType.TRANSFER) {
-                registrySnapshot.otherExpenseCategory
-            } else {
-                registrySnapshot.guessFromMerchant(
-                    merchant,
-                    isIncome = normalizedOpType == OperationType.INCOME
+                val registrySnapshot = synchronized(configLock) { _categoryRegistry.value }
+                val guessedCategory = if (normalizedOpType == OperationType.TRANSFER) {
+                    registrySnapshot.otherExpenseCategory
+                } else {
+                    registrySnapshot.guessFromMerchant(
+                        merchant,
+                        isIncome = normalizedOpType == OperationType.INCOME
+                    )
+                }
+                val storedOperationType = if (normalizedOpType == OperationType.EXPENSE) {
+                    ""
+                } else {
+                    normalizedOpType.name
+                }
+                val expense = ExpenseEntity(
+                    amountRub = amountRub,
+                    merchant = merchant.ifBlank { "Покупка по карте" },
+                    categoryName = guessedCategory.id,
+                    authorName = prefs.currentUserName,
+                    sourceType = sourceType,
+                    isPendingConfirmation = !prefs.autoConfirmBankPush,
+                    createdAtEpochMs = now,
+                    updatedAtEpochMs = now,
+                    rawPushOrQrText = rawText,
+                    dedupSignature = signature,
+                    operationType = storedOperationType,
+                    originDeviceId = prefs.deviceInstallationId
                 )
+                dao.upsert(expense)
+                true
             }
-            val storedOperationType = if (normalizedOpType == OperationType.EXPENSE) {
-                ""
-            } else {
-                normalizedOpType.name
-            }
-            val expense = ExpenseEntity(
-                amountRub = amountRub,
-                merchant = merchant.ifBlank { "Покупка по карте" },
-                categoryName = guessedCategory.id,
-                authorName = prefs.currentUserName,
-                sourceType = sourceType,
-                isPendingConfirmation = !prefs.autoConfirmBankPush,
-                createdAtEpochMs = now,
-                updatedAtEpochMs = now,
-                rawPushOrQrText = rawText,
-                dedupSignature = signature,
-                operationType = storedOperationType,
-                originDeviceId = prefs.deviceInstallationId
-            )
-            dao.upsert(expense)
-            true
         }
         if (inserted) {
             BudgetWidgetProvider.requestUpdate(appContext)

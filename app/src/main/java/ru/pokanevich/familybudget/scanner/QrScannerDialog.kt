@@ -50,12 +50,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
+import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import ru.pokanevich.familybudget.ui.theme.LocalFamilyPalette
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 @Composable
 fun QrScannerDialog(
@@ -75,8 +77,18 @@ fun QrScannerDialog(
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     val executor = remember { Executors.newSingleThreadExecutor() }
+    val isDisposed = remember { AtomicBoolean(false) }
+    val handled = remember { AtomicBoolean(false) }
+    var cameraProviderRef by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    var imageAnalysisRef by remember { mutableStateOf<ImageAnalysis?>(null) }
+    var barcodeScannerRef by remember { mutableStateOf<BarcodeScanner?>(null) }
+
     DisposableEffect(Unit) {
         onDispose {
+            isDisposed.set(true)
+            runCatching { imageAnalysisRef?.clearAnalyzer() }
+            runCatching { cameraProviderRef?.unbindAll() }
+            runCatching { barcodeScannerRef?.close() }
             executor.shutdown()
         }
     }
@@ -133,7 +145,18 @@ fun QrScannerDialog(
                                 val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
 
                                 cameraProviderFuture.addListener({
-                                    val cameraProvider = cameraProviderFuture.get()
+                                    if (isDisposed.get()) return@addListener
+                                    val cameraProvider = runCatching { cameraProviderFuture.get() }
+                                        .onFailure {
+                                            errorMsg = "Не удалось инициализировать камеру: ${it.message ?: "ошибка"}"
+                                        }
+                                        .getOrNull() ?: return@addListener
+
+                                    if (isDisposed.get()) {
+                                        runCatching { cameraProvider.unbindAll() }
+                                        return@addListener
+                                    }
+
                                     val preview = Preview.Builder().build().also {
                                         it.setSurfaceProvider(previewView.surfaceProvider)
                                     }
@@ -149,11 +172,14 @@ fun QrScannerDialog(
                                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                                         .build()
 
-                                    var handled = false
+                                    cameraProviderRef = cameraProvider
+                                    imageAnalysisRef = analysis
+                                    barcodeScannerRef = scanner
+
                                     analysis.setAnalyzer(executor) { imageProxy ->
                                         @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
                                         val mediaImage = imageProxy.image
-                                        if (mediaImage != null && !handled) {
+                                        if (mediaImage != null && !handled.get() && !isDisposed.get()) {
                                             val image = InputImage.fromMediaImage(
                                                 mediaImage,
                                                 imageProxy.imageInfo.rotationDegrees
@@ -163,11 +189,14 @@ fun QrScannerDialog(
                                                     for (barcode in barcodes) {
                                                         val raw = barcode.rawValue ?: continue
                                                         val parsed = FnsQrParser.parse(raw)
-                                                        if (parsed != null && !handled) {
-                                                            handled = true
+                                                        if (parsed != null && handled.compareAndSet(false, true)) {
                                                             onReceiptDetected(parsed)
+                                                            break
                                                         }
                                                     }
+                                                }
+                                                .addOnFailureListener {
+                                                    // Пропускаем отдельный сбойный кадр, не прерывая поток камеры
                                                 }
                                                 .addOnCompleteListener {
                                                     imageProxy.close()
@@ -185,6 +214,8 @@ fun QrScannerDialog(
                                             preview,
                                             analysis
                                         )
+                                    }.onFailure {
+                                        errorMsg = "Камера недоступна: ${it.message ?: "ошибка привязки"}"
                                     }
                                 }, ContextCompat.getMainExecutor(ctx))
 

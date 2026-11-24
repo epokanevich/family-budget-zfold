@@ -75,5 +75,21 @@ class FnsQrParserTest {
 
         // Empty s parameter
         assertNull(FnsQrParser.parse("t=20261116T1425&s=&fn=123"))
+
+        // Non-finite values
+        assertNull(FnsQrParser.parse("t=20261116T1425&s=NaN&fn=123"))
+        assertNull(FnsQrParser.parse("t=20261116T1425&s=Infinity&fn=123"))
+    }
+
+    @Test
+    fun parse_urlWrappedOfdQr_success() {
+        val urlQr = "https://check.nalog.ru/receipt/?t=20261116T1425&s=2490.50&fn=9960440300123456&i=45210&fp=1234567890&n=1#top"
+        val result = FnsQrParser.parse(urlQr)
+
+        assertNotNull(result)
+        assertEquals(2490.50, result!!.amountRub, 0.001)
+        assertEquals(urlQr, result.rawQrString)
+        val expectedTime = SimpleDateFormat("yyyyMMdd'T'HHmm", Locale.US).parse("20261116T1425")!!.time
+        assertEquals(expectedTime, result.timestampMs)
     }
 }

@@ -7,7 +7,7 @@ import android.service.notification.StatusBarNotification
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 import ru.pokanevich.familybudget.data.BudgetRepository
 import ru.pokanevich.familybudget.data.FamilyPreferences
 
@@ -21,6 +21,11 @@ class BankPushListenerService : NotificationListenerService() {
          */
         internal const val STALE_NOTIFICATION_MS = BankPushTimeValidator.MAX_ALLOWED_DRIFT_MS
         private val deduplicator = PushNotificationDeduplicator()
+    }
+
+    override fun onDestroy() {
+        serviceScope.cancel()
+        super.onDestroy()
     }
 
     override fun onListenerConnected() {
@@ -141,14 +146,12 @@ class BankPushListenerService : NotificationListenerService() {
         prefs.appendPushLog("Поймано ${parsed.amountRub} ₽ (${parsed.merchant}) [$packageName]")
 
         val repository = BudgetRepository.getInstance(applicationContext)
-        serviceScope.launch {
-            repository.ingestBankNotification(
-                amountRub = parsed.amountRub,
-                merchant = parsed.merchant,
-                sourceType = parsed.sourceType,
-                rawText = parsed.rawText,
-                suggestedOperationType = parsed.suggestedOperationType
-            )
-        }
+        repository.enqueueBankNotification(
+            amountRub = parsed.amountRub,
+            merchant = parsed.merchant,
+            sourceType = parsed.sourceType,
+            rawText = parsed.rawText,
+            suggestedOperationType = parsed.suggestedOperationType
+        )
     }
 }
