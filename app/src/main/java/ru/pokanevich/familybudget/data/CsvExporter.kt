@@ -15,9 +15,11 @@ object CsvExporter {
     private val dateFormat = ThreadLocal.withInitial { SimpleDateFormat("dd.MM.yyyy", ruLocale) }
     private val timeFormat = ThreadLocal.withInitial { SimpleDateFormat("HH:mm", ruLocale) }
 
-    private val amountFormatter = DecimalFormat("0.00", DecimalFormatSymbols(Locale.US).apply {
-        decimalSeparator = '.'
-    })
+    private val amountFormatter = ThreadLocal.withInitial {
+        DecimalFormat("0.00", DecimalFormatSymbols(Locale.US).apply {
+            decimalSeparator = '.'
+        })
+    }
 
     private const val CSV_DELIMITER = ";"
     private const val CSV_EOL = "\r\n"
@@ -74,7 +76,7 @@ object CsvExporter {
                 SavingsGoalCalculator.CATEGORY_GOAL_WITHDRAW -> "Снятие с копилки"
                 else -> registry.resolve(expense.categoryName).displayName
             }
-            val amountStr = amountFormatter.format(expense.amountRub)
+            val amountStr = amountFormatter.get()!!.format(expense.amountRub)
             val merchantStr = expense.merchant
             val noteStr = expense.note
             val authorStr = expense.authorName

@@ -111,7 +111,7 @@ object RecurringPaymentScheduler {
             updatedPayments.add(
                 payment.copy(
                     lastPaidPeriodKey = currentMonthKey,
-                    updatedAtEpochMs = maxOf(scheduledMs, payment.updatedAtEpochMs + 1L)
+                    updatedAtEpochMs = maxOf(nowMs, scheduledMs, payment.updatedAtEpochMs + 1L)
                 )
             )
         }

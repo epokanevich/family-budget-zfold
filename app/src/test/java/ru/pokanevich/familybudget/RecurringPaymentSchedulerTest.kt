@@ -309,4 +309,30 @@ class RecurringPaymentSchedulerTest {
         assertEquals(OperationType.TRANSFER, transferExp.effectiveOperationType)
         assertTrue(transferExp.isTransfer)
     }
+
+    @Test
+    fun updatedPaymentTimestamp_isAtLeastNowMs_whenTriggeredLaterInMonth() {
+        val payment = RecurringPaymentEntity(
+            id = "water-1",
+            title = "Вода",
+            amountRub = 1_200.0,
+            categoryId = ExpenseCategory.UTILITIES.name,
+            dayOfMonth = 5,
+            autoCreateInFeed = true,
+            lastPaidPeriodKey = "",
+            updatedAtEpochMs = epochMs(2026, 11, 1, 8, 0)
+        )
+        val triggerNow = epochMs(2026, 11, 20, 14, 30)
+        val res = RecurringPaymentScheduler.evaluateDuePayments(
+            payments = listOf(payment),
+            nowMs = triggerNow,
+            zoneId = zone
+        )
+        val updated = res.updatedPayments.single()
+        assertEquals("2026-11", updated.lastPaidPeriodKey)
+        assertTrue(
+            "updatedAtEpochMs must reflect at least triggerNow ($triggerNow), was ${updated.updatedAtEpochMs}",
+            updated.updatedAtEpochMs >= triggerNow
+        )
+    }
 }

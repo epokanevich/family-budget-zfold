@@ -7,6 +7,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import ru.pokanevich.familybudget.data.BudgetRepository
+import ru.pokanevich.familybudget.data.ExpenseCategory
 import ru.pokanevich.familybudget.data.ExpenseEntity
 
 class CrossDevicePushDedupTest {
@@ -392,5 +393,42 @@ class CrossDevicePushDedupTest {
         assertTrue(losers.isEmpty())
         assertFalse(map.getValue("sber-only").isDeleted)
         assertFalse(map.getValue("tbank-only").isDeleted)
+    }
+
+    @Test
+    fun `deleted recurring tombstone resists later-timezone auto-draft resurrection`() {
+        val paymentId = "rent-1"
+        val detId = "rec_${paymentId}_2026-11"
+        val deletedOnPhoneA = ExpenseEntity(
+            id = detId,
+            amountRub = 45000.0,
+            merchant = "Аренда",
+            categoryName = ExpenseCategory.UTILITIES.name,
+            sourceType = ru.pokanevich.familybudget.data.RecurringPaymentScheduler.SOURCE_TYPE_RECURRING,
+            isPendingConfirmation = false,
+            isDeleted = true,
+            isSynced = true,
+            createdAtEpochMs = baseTime,
+            updatedAtEpochMs = baseTime + 1_000L
+        )
+        // Телефон B в другом часовом поясе сгенерировал pending-черновик с более поздним timestamp
+        val laterDraftOnPhoneB = deletedOnPhoneA.copy(
+            isPendingConfirmation = true,
+            isDeleted = false,
+            isSynced = false,
+            createdAtEpochMs = baseTime + 7_200_000L,
+            updatedAtEpochMs = baseTime + 7_200_000L
+        )
+
+        val plan = BudgetRepository.buildSyncMergePlan(
+            localList = listOf(laterDraftOnPhoneB),
+            remoteMap = mapOf(detId to deletedOnPhoneA),
+            remoteExists = true,
+            nowMs = baseTime + 7_250_000L
+        )
+
+        val resolved = plan.mergedMap.getValue(detId)
+        assertTrue("Deleted recurring payment must remain deleted", resolved.isDeleted)
+        assertTrue(plan.needCloudPush)
     }
 }

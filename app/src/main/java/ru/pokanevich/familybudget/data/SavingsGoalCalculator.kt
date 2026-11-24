@@ -26,8 +26,8 @@ object SavingsGoalCalculator {
         val visibleGoals = goals.filter { !it.isDeleted }
         if (visibleGoals.isEmpty()) return emptyList()
 
-        val depositsByGoal = HashMap<String, Double>()
-        val withdrawsByGoal = HashMap<String, Double>()
+        val depositsByGoalKopecks = HashMap<String, Long>()
+        val withdrawsByGoalKopecks = HashMap<String, Long>()
 
         for (expense in expenses) {
             if (expense.isDeleted || expense.isPendingConfirmation) continue
@@ -36,22 +36,28 @@ object SavingsGoalCalculator {
             val amount = expense.amountRub
             if (!amount.isFinite() || amount <= 0.0) continue
 
+            val kopecks = MoneyMath.toKopecks(amount)
             when (expense.categoryName) {
                 CATEGORY_GOAL_DEPOSIT ->
-                    depositsByGoal[goalId] = (depositsByGoal[goalId] ?: 0.0) + amount
+                    depositsByGoalKopecks[goalId] = (depositsByGoalKopecks[goalId] ?: 0L) + kopecks
                 CATEGORY_GOAL_WITHDRAW ->
-                    withdrawsByGoal[goalId] = (withdrawsByGoal[goalId] ?: 0.0) + amount
+                    withdrawsByGoalKopecks[goalId] = (withdrawsByGoalKopecks[goalId] ?: 0L) + kopecks
             }
         }
 
         return visibleGoals.map { goal ->
-            val deposits = depositsByGoal[goal.id] ?: 0.0
-            val withdraws = withdrawsByGoal[goal.id] ?: 0.0
-            val saved = goal.initialAmountRub + deposits - withdraws
+            val depositKop = depositsByGoalKopecks[goal.id] ?: 0L
+            val withdrawKop = withdrawsByGoalKopecks[goal.id] ?: 0L
+            val initialKop = MoneyMath.toKopecks(goal.initialAmountRub)
+            val savedKop = initialKop + depositKop - withdrawKop
+            val deposits = MoneyMath.fromKopecks(depositKop)
+            val withdraws = MoneyMath.fromKopecks(withdrawKop)
+            val saved = MoneyMath.fromKopecks(savedKop)
             val target = goal.targetAmountRub.coerceAtLeast(0.0)
-            val remaining = if (target > 0.0) (target - saved).coerceAtLeast(0.0) else 0.0
+            val targetKop = MoneyMath.toKopecks(target)
+            val remaining = if (targetKop > 0L) MoneyMath.fromKopecks((targetKop - savedKop).coerceAtLeast(0L)) else 0.0
             val ratio = if (target > 0.0) (saved / target).toFloat().coerceIn(0f, 1f) else 0f
-            val completed = target > 0.0 && saved >= target - 0.005
+            val completed = targetKop > 0L && savedKop >= targetKop
 
             SavingsGoalProgress(
                 goal = goal,
@@ -85,7 +91,7 @@ object SavingsGoalCalculator {
         return buildGoalProgressList(goals, expenses)
             .asSequence()
             .filter { !it.goal.isArchived }
-            .sumOf { it.savedAmountRub.coerceAtLeast(0.0) }
+            .sumRubOf { it.savedAmountRub.coerceAtLeast(0.0) }
     }
 
     fun resolveDisplayCategory(

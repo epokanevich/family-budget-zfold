@@ -43,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import ru.pokanevich.familybudget.data.sumRubOf
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -255,8 +256,8 @@ fun ExpensesFeedPane(
             .entries
             .sortedByDescending { it.key }
             .map { entry ->
-                val dayExpenseSum = entry.value.filter { !it.isIncome(registry) && !it.isTransfer(registry) }.sumOf { it.amountRub }
-                val dayIncomeSum = entry.value.filter { it.isIncome(registry) }.sumOf { it.amountRub }
+                val dayExpenseSum = entry.value.filter { !it.isIncome(registry) && !it.isTransfer(registry) }.sumRubOf { it.amountRub }
+                val dayIncomeSum = entry.value.filter { it.isIncome(registry) }.sumRubOf { it.amountRub }
                 DayExpenseGroup(
                     dayKey = entry.key,
                     headerTitle = Formatters.formatDayHeader(entry.value.first().createdAtEpochMs),

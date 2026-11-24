@@ -44,8 +44,8 @@ object MonthlyTrendCalculator {
         val endExclusiveEpochMs = endMonth.plusMonths(1).atDay(1).atStartOfDay(zoneId).toInstant().toEpochMilli()
 
         val monthBuckets = ArrayList<YearMonth>(count)
-        val expenseSums = DoubleArray(count)
-        val incomeSums = DoubleArray(count)
+        val expenseKopecks = LongArray(count)
+        val incomeKopecks = LongArray(count)
         val indexByYearMonth = HashMap<YearMonth, Int>(count * 2)
 
         for (i in 0 until count) {
@@ -72,22 +72,23 @@ object MonthlyTrendCalculator {
             val ym = YearMonth.of(zoned.year, zoned.monthValue)
             val idx = indexByYearMonth[ym] ?: continue
 
+            val amountKopecks = MoneyMath.toKopecks(expense.amountRub)
             when (opType) {
-                OperationType.INCOME -> incomeSums[idx] += expense.amountRub
-                OperationType.EXPENSE -> expenseSums[idx] += expense.amountRub
+                OperationType.INCOME -> incomeKopecks[idx] += amountKopecks
+                OperationType.EXPENSE -> expenseKopecks[idx] += amountKopecks
                 OperationType.TRANSFER -> Unit
             }
         }
 
         return monthBuckets.mapIndexed { idx, ym ->
-            val exp = expenseSums[idx]
-            val inc = incomeSums[idx]
+            val expKop = expenseKopecks[idx]
+            val incKop = incomeKopecks[idx]
             MonthlyTrendPoint(
                 yearMonthKey = "%04d-%02d".format(Locale.US, ym.year, ym.monthValue),
                 label = shortMonthLabels[ym.monthValue - 1],
-                expenseRub = exp,
-                incomeRub = inc,
-                netRub = inc - exp
+                expenseRub = MoneyMath.fromKopecks(expKop),
+                incomeRub = MoneyMath.fromKopecks(incKop),
+                netRub = MoneyMath.fromKopecks(incKop - expKop)
             )
         }
     }

@@ -857,7 +857,11 @@ class BudgetRepository private constructor(context: Context) {
         val existingIds = dao.getAllExpenses().map { it.id }.toSet()
         val newItems = items.filter { it.id !in existingIds }.map { it.copy(isSynced = false) }
         if (newItems.isNotEmpty()) {
-            dao.upsertAll(newItems)
+            db.withTransaction {
+                newItems.chunked(250).forEach { chunk ->
+                    dao.upsertAll(chunk)
+                }
+            }
             BudgetWidgetProvider.requestUpdate(appContext)
             requestCoalescedSync()
         }
@@ -1473,7 +1477,17 @@ class BudgetRepository private constructor(context: Context) {
                         toUpsertLocally.add(syncedRem)
                     }
                     loc != null && rem != null -> {
-                        if (loc.updatedAtEpochMs > rem.updatedAtEpochMs) {
+                        val resolvedRecurring = resolveRecurringConflict(loc, rem)
+                        if (resolvedRecurring != null) {
+                            mergedMap[id] = resolvedRecurring
+                            if (resolvedRecurring.updatedAtEpochMs > rem.updatedAtEpochMs || !resolvedRecurring.isSynced) {
+                                needCloudPush = true
+                                pushedVersions[id] = resolvedRecurring.updatedAtEpochMs
+                            }
+                            if (resolvedRecurring != loc) {
+                                toUpsertLocally.add(resolvedRecurring)
+                            }
+                        } else if (loc.updatedAtEpochMs > rem.updatedAtEpochMs) {
                             mergedMap[id] = loc
                             needCloudPush = true
                             if (!loc.isSynced) pushedVersions[id] = loc.updatedAtEpochMs
@@ -1517,6 +1531,52 @@ class BudgetRepository private constructor(context: Context) {
             val losers: List<ExpenseEntity>,
             val enrichedWinners: List<ExpenseEntity>
         )
+
+        private fun isRecurringAutoDraft(item: ExpenseEntity): Boolean =
+            item.sourceType == RecurringPaymentScheduler.SOURCE_TYPE_RECURRING &&
+                item.isPendingConfirmation &&
+                !item.isDeleted
+
+        /**
+         * Anti-resurrection guard для детерминированных регулярных операций (`rec_<id>_<YYYY-MM>`):
+         * авто-сгенерированный черновик из другого часового пояса не должен воскрешать tombstone (`isDeleted`)
+         * или откатывать подтверждённую запись обратно в `isPendingConfirmation = true`.
+         */
+        private fun resolveRecurringConflict(loc: ExpenseEntity, rem: ExpenseEntity): ExpenseEntity? {
+            val involvesRecurring = loc.sourceType == RecurringPaymentScheduler.SOURCE_TYPE_RECURRING ||
+                rem.sourceType == RecurringPaymentScheduler.SOURCE_TYPE_RECURRING
+            if (!involvesRecurring) return null
+
+            if (loc.isDeleted != rem.isDeleted) {
+                val deletedSide = if (loc.isDeleted) loc else rem
+                val liveSide = if (loc.isDeleted) rem else loc
+                if (isRecurringAutoDraft(liveSide)) {
+                    val bumpedTs = maxOf(deletedSide.updatedAtEpochMs, liveSide.updatedAtEpochMs)
+                    val fromLocal = loc.isDeleted
+                    val matchesRemoteVersion = !fromLocal && bumpedTs == rem.updatedAtEpochMs && rem.isDeleted
+                    return deletedSide.copy(
+                        updatedAtEpochMs = bumpedTs,
+                        isSynced = matchesRemoteVersion
+                    )
+                }
+            }
+
+            if (!loc.isDeleted && !rem.isDeleted && loc.isPendingConfirmation != rem.isPendingConfirmation) {
+                val confirmedSide = if (!loc.isPendingConfirmation) loc else rem
+                val draftSide = if (loc.isPendingConfirmation) loc else rem
+                if (isRecurringAutoDraft(draftSide)) {
+                    val bumpedTs = maxOf(confirmedSide.updatedAtEpochMs, draftSide.updatedAtEpochMs)
+                    val fromLocal = !loc.isPendingConfirmation
+                    val matchesRemoteVersion = !fromLocal && bumpedTs == rem.updatedAtEpochMs && !rem.isPendingConfirmation
+                    return confirmedSide.copy(
+                        updatedAtEpochMs = bumpedTs,
+                        isSynced = matchesRemoteVersion
+                    )
+                }
+            }
+
+            return null
+        }
 
         private val CARD_LAST4_IN_RAW_REGEX = Regex(
             "(?:[•*·]+\\s*)+(\\d{4})\\b|\\b(?:карт[аеыу]?|сч[её]т[ау]?|mir|мир|visa|mastercard)\\s*[•*·-]*\\s*(\\d{4})\\b",

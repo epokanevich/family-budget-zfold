@@ -24,6 +24,8 @@ data class MmImportResult(
 
 object MoneyManagerImporter {
 
+    private const val MAX_EXTRACT_BYTES = 100L * 1024L * 1024L
+
     suspend fun importFromBackupUri(
         context: Context,
         uri: Uri,
@@ -69,7 +71,17 @@ object MoneyManagerImporter {
                         while (entry != null) {
                             if (entry.name.endsWith(".db", ignoreCase = true)) {
                                 FileOutputStream(tempDb).use { out ->
-                                    zis.copyTo(out)
+                                    val buffer = ByteArray(8192)
+                                    var totalBytes = 0L
+                                    while (true) {
+                                        val readCount = zis.read(buffer)
+                                        if (readCount <= 0) break
+                                        totalBytes += readCount
+                                        if (totalBytes > MAX_EXTRACT_BYTES) {
+                                            throw IllegalStateException("Размер базы внутри архива превышает допустимый лимит (100 МБ)")
+                                        }
+                                        out.write(buffer, 0, readCount)
+                                    }
                                 }
                                 dbExtracted = true
                                 break

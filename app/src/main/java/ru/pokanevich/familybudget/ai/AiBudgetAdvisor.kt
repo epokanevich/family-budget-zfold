@@ -8,11 +8,13 @@ import ru.pokanevich.familybudget.data.CategoryDescriptor
 import ru.pokanevich.familybudget.data.CategoryLimitMode
 import ru.pokanevich.familybudget.data.CategoryRegistry
 import ru.pokanevich.familybudget.data.ExpenseEntity
+import ru.pokanevich.familybudget.data.MoneyMath
 import ru.pokanevich.familybudget.data.OperationType
 import ru.pokanevich.familybudget.data.RecurringPaymentEntity
 import ru.pokanevich.familybudget.data.RecurringPaymentScheduler
 import ru.pokanevich.familybudget.data.SavingsGoalCalculator
 import ru.pokanevich.familybudget.data.SavingsGoalEntity
+import ru.pokanevich.familybudget.data.sumRubOf
 import ru.pokanevich.familybudget.ui.util.BudgetPeriod
 import ru.pokanevich.familybudget.ui.util.Formatters
 import ru.pokanevich.familybudget.ui.util.PeriodCalculator
@@ -178,11 +180,15 @@ object AiBudgetAdvisor {
         }
 
         // Общий баланс за всё время (как "Итого" в Money Manager)
-        val allTimeIncome = activeAll.filter { it.isIncome(registry) }.sumOf { it.amountRub }
-        val allTimeExpense = activeAll.filter { !it.isIncome(registry) }.sumOf { it.amountRub }
-        val allTimeBalance = allTimeIncome - allTimeExpense
+        val allTimeIncomeKopecks = activeAll.filter { it.isIncome(registry) }.sumOf { MoneyMath.toKopecks(it.amountRub) }
+        val allTimeExpenseKopecks = activeAll.filter { !it.isIncome(registry) }.sumOf { MoneyMath.toKopecks(it.amountRub) }
+        val allTimeIncome = MoneyMath.fromKopecks(allTimeIncomeKopecks)
+        val allTimeExpense = MoneyMath.fromKopecks(allTimeExpenseKopecks)
+        val allTimeBalance = MoneyMath.fromKopecks(allTimeIncomeKopecks - allTimeExpenseKopecks)
         val totalSavedInGoalsRub = SavingsGoalCalculator.calculateTotalSavedInGoals(savingsGoals, expenses)
-        val freeUnallocatedBalanceRub = allTimeBalance - totalSavedInGoalsRub
+        val freeUnallocatedBalanceRub = MoneyMath.fromKopecks(
+            (allTimeIncomeKopecks - allTimeExpenseKopecks) - MoneyMath.toKopecks(totalSavedInGoalsRub)
+        )
 
         val periodItems = if (window.period == BudgetPeriod.ALL) {
             activeAll
@@ -193,8 +199,8 @@ object AiBudgetAdvisor {
         val periodExpenses = periodItems.filter { !it.isIncome(registry) }
         val periodIncomes = periodItems.filter { it.isIncome(registry) }
 
-        val totalSpent = periodExpenses.sumOf { it.amountRub }
-        val totalIncome = periodIncomes.sumOf { it.amountRub }
+        val totalSpent = periodExpenses.sumRubOf { it.amountRub }
+        val totalIncome = periodIncomes.sumRubOf { it.amountRub }
 
         val periodBudget = when (window.period) {
             BudgetPeriod.DAY -> monthlyBudgetRub / 30.0
@@ -231,7 +237,7 @@ object AiBudgetAdvisor {
                     deterministicId in pendingRecurringIds ||
                         (p.lastPaidPeriodKey != currentMonthKey && deterministicId !in confirmedRecurringIds)
                 }
-                .sumOf { it.amountRub.coerceAtLeast(0.0) }
+                .sumRubOf { it.amountRub.coerceAtLeast(0.0) }
         } else {
             0.0
         }
@@ -258,7 +264,7 @@ object AiBudgetAdvisor {
 
         val diagnoses = (activeExpenseCats + extraExpenseCats).map { cat ->
             val catExpenses = expensesByCategoryId[cat.id].orEmpty()
-            val catSpent = catExpenses.sumOf { it.amountRub }
+            val catSpent = catExpenses.sumRubOf { it.amountRub }
             val catLimit = when (cat.limitMode) {
                 CategoryLimitMode.PERCENT -> periodBudget * (cat.limitValue / 100.0)
                 CategoryLimitMode.FIXED_RUB -> when (window.period) {
@@ -322,7 +328,7 @@ object AiBudgetAdvisor {
             val catIncomes = incomesByCategoryId[cat.id].orEmpty()
             IncomeCategoryBreakdown(
                 category = cat,
-                amountRub = catIncomes.sumOf { it.amountRub },
+                amountRub = catIncomes.sumRubOf { it.amountRub },
                 transactionCount = catIncomes.size
             )
         }
@@ -382,8 +388,8 @@ object AiBudgetAdvisor {
             isCurrentMonth = window.isCurrentPeriod,
             totalExpenseTransactions = periodExpenses.size,
             totalIncomeTransactions = periodIncomes.size,
-            eugeneSpentRub = eugeneExpenses.sumOf { it.amountRub },
-            anzhelikaSpentRub = anzhelikaExpenses.sumOf { it.amountRub },
+            eugeneSpentRub = eugeneExpenses.sumRubOf { it.amountRub },
+            anzhelikaSpentRub = anzhelikaExpenses.sumRubOf { it.amountRub },
             eugeneCount = eugeneExpenses.size,
             anzhelikaCount = anzhelikaExpenses.size,
             headlineVerdict = headline,

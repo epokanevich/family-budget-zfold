@@ -13,18 +13,22 @@ object Formatters {
 
     private val ruLocale = Locale("ru", "RU")
 
-    private val integerFormatter = DecimalFormat("#,##0", DecimalFormatSymbols(ruLocale).apply {
-        groupingSeparator = '\u00A0'
-    })
+    private val integerFormatter = ThreadLocal.withInitial {
+        DecimalFormat("#,##0", DecimalFormatSymbols(ruLocale).apply {
+            groupingSeparator = '\u00A0'
+        })
+    }
 
-    private val decimalFormatter = DecimalFormat("#,##0.00", DecimalFormatSymbols(ruLocale).apply {
-        groupingSeparator = '\u00A0'
-        decimalSeparator = ','
-    })
+    private val decimalFormatter = ThreadLocal.withInitial {
+        DecimalFormat("#,##0.00", DecimalFormatSymbols(ruLocale).apply {
+            groupingSeparator = '\u00A0'
+            decimalSeparator = ','
+        })
+    }
 
-    private val timeFormat = SimpleDateFormat("HH:mm", ruLocale)
-    private val dayMonthFormat = SimpleDateFormat("d MMMM", ruLocale)
-    private val dayMonthYearFormat = SimpleDateFormat("d MMMM yyyy", ruLocale)
+    private val timeFormat = ThreadLocal.withInitial { SimpleDateFormat("HH:mm", ruLocale) }
+    private val dayMonthFormat = ThreadLocal.withInitial { SimpleDateFormat("d MMMM", ruLocale) }
+    private val dayMonthYearFormat = ThreadLocal.withInitial { SimpleDateFormat("d MMMM yyyy", ruLocale) }
 
     private val monthNamesNominative = listOf(
         "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
@@ -42,9 +46,9 @@ object Formatters {
         val rounded = kopecks / 100.0
         val hasFraction = showKopecksIfAny && (kopecks % 100L != 0L)
         val numStr = if (hasFraction) {
-            decimalFormatter.format(rounded)
+            decimalFormatter.get()!!.format(rounded)
         } else {
-            integerFormatter.format(amount.roundToLong())
+            integerFormatter.get()!!.format(amount.roundToLong())
         }
         return "$numStr\u00A0₽"
     }
@@ -59,7 +63,7 @@ object Formatters {
     }
 
     fun formatTimeOnly(epochMs: Long): String {
-        return timeFormat.format(Date(epochMs))
+        return timeFormat.get()!!.format(Date(epochMs))
     }
 
     fun formatFullDateTime(epochMs: Long): String {
@@ -74,8 +78,8 @@ object Formatters {
         return when {
             isSameDay(target, today) -> "Сегодня"
             isSameDay(target, yesterday) -> "Вчера"
-            target.get(Calendar.YEAR) == today.get(Calendar.YEAR) -> dayMonthFormat.format(Date(epochMs))
-            else -> dayMonthYearFormat.format(Date(epochMs))
+            target.get(Calendar.YEAR) == today.get(Calendar.YEAR) -> dayMonthFormat.get()!!.format(Date(epochMs))
+            else -> dayMonthYearFormat.get()!!.format(Date(epochMs))
         }
     }
 

@@ -55,8 +55,10 @@ object SplitExpenseBuilder {
                 "Сумма части #${index + 1} должна быть больше 0"
             }
         }
-        val partsSum = parts.sumOf { it.amountRub }
-        require(abs(partsSum - totalAmountRub) <= AMOUNT_TOLERANCE_RUB + 1e-6) {
+        val partsSumKopecks = parts.sumOf { MoneyMath.toKopecks(it.amountRub) }
+        val totalKopecks = MoneyMath.toKopecks(totalAmountRub)
+        require(abs(partsSumKopecks - totalKopecks) <= 1L) {
+            val partsSum = MoneyMath.fromKopecks(partsSumKopecks)
             "Сумма частей ($partsSum) не совпадает с общей суммой ($totalAmountRub)"
         }
 
