@@ -119,6 +119,7 @@ fun FamilySettingsSheet(
     onSimulateTestPush: () -> Unit,
     onImportBackupUri: (Uri) -> Unit,
     onImportLegacyJsonUri: (Uri) -> Unit = {},
+    onImportCsvUri: (Uri) -> Unit = {},
     onSyncNow: () -> Unit,
     onOpenCategoriesAndLimits: () -> Unit,
     onOpenRecurringPayments: () -> Unit,
@@ -142,6 +143,13 @@ fun FamilySettingsSheet(
     ) { uri ->
         if (uri != null) {
             onImportLegacyJsonUri(uri)
+        }
+    }
+    val csvImportPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            onImportCsvUri(uri)
         }
     }
 
@@ -909,6 +917,26 @@ fun FamilySettingsSheet(
                     Text(
                         text = "Импорт резервной копии (.json)",
                         color = palette.accentBlue,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                OutlinedButton(
+                    enabled = !isImportingBackup,
+                    onClick = { csvImportPickerLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "text/plain", "*/*")) },
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, palette.accentEmerald),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.FileUpload,
+                        contentDescription = null,
+                        tint = palette.accentEmerald,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Импорт таблицы расходов (.csv)",
+                        color = palette.accentEmerald,
                         fontWeight = FontWeight.SemiBold
                     )
                 }

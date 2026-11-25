@@ -536,6 +536,80 @@ class BudgetRepository private constructor(context: Context) {
         }
     }
 
+    suspend fun importNativeCsvUri(
+        uri: Uri,
+        defaultAuthorName: String = prefs.currentUserName
+    ): Result<CsvImportResult> = withContext(Dispatchers.IO) {
+        runCatching {
+            val maxCsvBytes = 50 * 1024 * 1024
+            val stream = appContext.contentResolver.openInputStream(uri)
+                ?: throw IllegalStateException("Не удалось открыть CSV-файл")
+            val bytes = stream.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buf = ByteArray(8192)
+                var total = 0
+                while (true) {
+                    val read = input.read(buf)
+                    if (read <= 0) break
+                    total += read
+                    if (total > maxCsvBytes) {
+                        throw IllegalStateException("CSV-файл превышает допустимый размер (50 МБ)")
+                    }
+                    out.write(buf, 0, read)
+                }
+                out.toByteArray()
+            }
+
+            val registrySnapshot = synchronized(configLock) { _categoryRegistry.value }
+            val nowMs = System.currentTimeMillis()
+            val parsedBatch = CsvImporter.parseCsvBytes(
+                bytes = bytes,
+                registry = registrySnapshot,
+                defaultAuthorName = defaultAuthorName,
+                nowEpochMs = nowMs
+            )
+            if (parsedBatch.items.isEmpty()) {
+                return@runCatching CsvImportResult(parsedTotal = 0, newlyAdded = 0, skippedDuplicates = 0)
+            }
+
+            val dedupResult = ingestMutex.withLock {
+                val existing = dao.getAllExpenses()
+                val res = CsvImporter.deduplicateAgainstExisting(
+                    candidates = parsedBatch.items,
+                    existing = existing,
+                    registry = registrySnapshot
+                )
+                if (res.toInsert.isNotEmpty()) {
+                    val deviceId = prefs.deviceInstallationId
+                    val prepared = res.toInsert.map {
+                        it.copy(
+                            isSynced = false,
+                            updatedAtEpochMs = nowMs,
+                            originDeviceId = it.originDeviceId.ifBlank { deviceId }
+                        )
+                    }
+                    db.withTransaction {
+                        prepared.chunked(250).forEach { chunk ->
+                            dao.upsertAll(chunk)
+                        }
+                    }
+                }
+                res
+            }
+
+            if (dedupResult.toInsert.isNotEmpty()) {
+                BudgetWidgetProvider.requestUpdate(appContext)
+                requestCoalescedSync()
+            }
+
+            CsvImportResult(
+                parsedTotal = parsedBatch.items.size,
+                newlyAdded = dedupResult.toInsert.size,
+                skippedDuplicates = dedupResult.skippedDuplicates
+            )
+        }
+    }
+
     private suspend fun applyLegacyMigrationPayload(payload: ru.pokanevich.familybudget.data.sync.LegacyMigrationPayload): Int {
         payload.config?.let { importedCfg ->
             synchronized(configLock) {

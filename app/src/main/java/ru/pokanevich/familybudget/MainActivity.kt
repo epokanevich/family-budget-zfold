@@ -1100,6 +1100,25 @@ fun FamilyBudgetApp(
                     isImportingBackup = false
                 }
             },
+            onImportCsvUri = { uri ->
+                isImportingBackup = true
+                importStatusMessage = null
+                scope.launch {
+                    val res = repository.importNativeCsvUri(
+                        uri = uri,
+                        defaultAuthorName = currentUserName
+                    )
+                    importStatusMessage = res.fold(
+                        onSuccess = { info ->
+                            "Готово (CSV): найдено ${info.parsedTotal}, добавлено ${info.newlyAdded}, дублей пропущено ${info.skippedDuplicates}"
+                        },
+                        onFailure = { err ->
+                            "Ошибка импорта CSV: ${err.message}"
+                        }
+                    )
+                    isImportingBackup = false
+                }
+            },
             onSyncNow = {
                 scope.launch { repository.syncWithCloudNow() }
             },
